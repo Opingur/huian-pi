@@ -35,7 +35,15 @@ ESP32_STATUS_FIELDS = (
     "vision_valid",
 )
 
-ESP32_SYSTEM_STATES = frozenset({"NORMAL", "CROWD_WARNING", "CROWD_DANGER", "FIRE", "COMM_TIMEOUT"})
+ESP32_SYSTEM_STATES = frozenset({
+    "NORMAL",
+    "WARNING",
+    "DANGER",
+    "CROWD_WARNING",
+    "CROWD_DANGER",
+    "FIRE",
+    "COMM_TIMEOUT",
+})
 _MAX_RX_BUFFER_BYTES = 4096
 
 
