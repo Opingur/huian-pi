@@ -49,6 +49,16 @@ class Esp32StatusReceiverTests(unittest.TestCase):
         self.assertEqual(parsed.temperature_c, 36.5)
         self.assertEqual(parsed.received_at, 10.0)
 
+    def test_warning_and_danger_states_are_accepted(self):
+        for system_state in ("WARNING", "DANGER"):
+            with self.subTest(system_state=system_state):
+                parsed = parse_esp32_status_message(
+                    json.dumps(status_payload(system_state=system_state)),
+                    received_at=10.0,
+                )
+                self.assertIsNotNone(parsed)
+                self.assertEqual(parsed.system_state, system_state)
+
     def test_invalid_temperature_never_becomes_a_fake_number(self):
         valid_invalid = status_payload(temperature_c=None, temperature_valid=False, temperature_warning=False)
         parsed = parse_esp32_status_message(json.dumps(valid_invalid), received_at=1.0)
