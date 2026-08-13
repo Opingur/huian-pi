@@ -190,12 +190,8 @@ def _draw_live_trend(canvas, status, context, entries: list) -> None:
     calibrated = bool(status.get("crowd_calibrated", False)) and isinstance(threshold, int) and not isinstance(threshold, bool) and threshold > 0
     if calibrated:
         entries.append(((TREND_X + TREND_WIDTH - 142, INFO_Y + 16), f"\u5b9e\u9a8c\u5371\u9669\u9608\u503c\uff1a{threshold}", _RED, 13))
-        eta = status.get("time_to_danger")
-        eta_text = "\u9884\u8ba1\u8fbe\u5230\u5b9e\u9a8c\u5371\u9669\u9608\u503c\uff1a--" if eta is None else f"\u9884\u8ba1\u7ea6 {eta} \u79d2\u8fbe\u5230\u5b9e\u9a8c\u9608\u503c"
-        entries.append(((TREND_X + 16, INFO_Y + 33), eta_text, _MUTED, 11))
     else:
         entries.append(((TREND_X + TREND_WIDTH - 174, INFO_Y + 16), "\u5b9e\u9a8c\u5371\u9669\u9608\u503c\uff1a\u5f85\u6807\u5b9a", _MUTED, 13))
-        entries.append(((TREND_X + 16, INFO_Y + 33), "\u9884\u8ba1\u8fbe\u5230\u5b9e\u9a8c\u5371\u9669\u9608\u503c\uff1a--", _MUTED, 11))
 
     real, forecast = _trend_points(context.get("prediction_history", []), status)
     left, right, top, bottom = _plot_bounds(rect)
@@ -246,8 +242,6 @@ def _draw_live_trend(canvas, status, context, entries: list) -> None:
     for relative_time, label in ((-15, "-15\u79d2"), (-10, "-10\u79d2"), (-5, "-5\u79d2"), (0, "\u73b0\u5728"), (10, "+10\u79d2"), (20, "+20\u79d2"), (30, "+30\u79d2")):
         entries.append(((pixel(relative_time, low)[0] - 12, bottom + 5), label, _MUTED, 11))
 
-    if not calibrated:
-        entries.append(((TREND_X + 22, INFO_Y + INFO_HEIGHT - 24), "\u9700\u5b8c\u6210\u771f\u5b9e\u697c\u68af\u5b9e\u9a8c\u6807\u5b9a", _MUTED, 11))
 
 
 def _crowd_state(status: Mapping[str, object]) -> tuple[str, tuple[int, int, int]]:
