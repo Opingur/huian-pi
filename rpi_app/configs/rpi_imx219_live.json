@@ -55,7 +55,7 @@
     "show_subtitle": false,
     "explain_track_id": null,
     "explain_lock_seconds": 1.0,
-    "font_path": "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    "font_path": "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "font_size": 24,
     "arrow_length_px": 48,
     "show_boxes": true,

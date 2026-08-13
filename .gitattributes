@@ -1,0 +1,19 @@
+* text=auto
+
+# Source files used on Raspberry Pi / Linux
+*.py   text eol=lf
+*.sh   text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.ino  text eol=lf
+*.cpp  text eol=lf
+*.h    text eol=lf
+*.csv  text eol=lf
+
+# Binary files
+*.jpg  binary
+*.jpeg binary
+*.png  binary
+*.mp4  binary
+*.pt   binary
+*.pth  binary

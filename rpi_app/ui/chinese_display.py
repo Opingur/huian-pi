@@ -30,96 +30,30 @@ _FONT_CANDIDATES = (
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
     "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
 )
-_LATIN_FONT_CANDIDATES = (
-    "C:/Windows/Fonts/arial.ttf",
-    "C:/Windows/Fonts/segoeui.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-)
-_SYMBOL_FONT_CANDIDATES = (
-    "C:/Windows/Fonts/msyh.ttc",
-    "C:/Windows/Fonts/segoeui.ttf",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-)
 
 
-def _first_font(candidates: tuple[str, ...], font_size: int) -> ImageFont.FreeTypeFont | None:
+@lru_cache(maxsize=16)
+def _load_font(font_path: str | None, font_size: int) -> ImageFont.FreeTypeFont:
+    """优先使用配置字体，否则自动查找 Windows / Raspberry Pi 常见中文字体。"""
+    candidates = ((font_path,) if font_path else ()) + _FONT_CANDIDATES
     for candidate in candidates:
-        if Path(candidate).is_file():
+        if candidate and Path(candidate).is_file():
             try:
                 return ImageFont.truetype(candidate, font_size)
             except OSError:
                 continue
-    return None
-
-
-@lru_cache(maxsize=32)
-def _load_font(font_path: str | None, font_size: int) -> ImageFont.FreeTypeFont:
-    """Load the configured CJK dashboard font, with known CJK fallbacks."""
-    candidates = ((font_path,) if font_path else ()) + _FONT_CANDIDATES
-    return _first_font(candidates, font_size) or ImageFont.load_default()
-
-
-@lru_cache(maxsize=16)
-def _load_latin_font(font_size: int) -> ImageFont.FreeTypeFont:
-    """Use a normal Latin font for ASCII glyphs missing from CJK-only fonts."""
-    return _first_font(_LATIN_FONT_CANDIDATES, font_size) or ImageFont.load_default()
-
-
-@lru_cache(maxsize=16)
-def _load_symbol_font(font_size: int) -> ImageFont.FreeTypeFont:
-    """Use the regular UI font for technical symbols such as Celsius."""
-    return _first_font(_SYMBOL_FONT_CANDIDATES, font_size) or _load_latin_font(font_size)
-
-
-def _font_has_glyph(font: ImageFont.FreeTypeFont, character: str) -> bool:
-    return bytes(font.getmask(character)) != bytes(font.getmask("\uffff"))
-
-
-def _font_for_character(character: str, primary_font, latin_font, symbol_font):
-    if ord(character) < 128:
-        return latin_font
-    if character in {"\u2103", "\u00b0"}:
-        return symbol_font if _font_has_glyph(symbol_font, character) else primary_font
-    return primary_font
-
-
-def _text_runs(text: object, primary_font: ImageFont.FreeTypeFont, latin_font: ImageFont.FreeTypeFont, symbol_font: ImageFont.FreeTypeFont | None = None):
-    value = str(text)
-    if not value:
-        return []
-    symbol_font = symbol_font or primary_font
-    runs = []
-    font = _font_for_character(value[0], primary_font, latin_font, symbol_font)
-    start = 0
-    for index, character in enumerate(value[1:], start=1):
-        next_font = _font_for_character(character, primary_font, latin_font, symbol_font)
-        if next_font is not font:
-            runs.append((value[start:index], font))
-            start = index
-            font = next_font
-    runs.append((value[start:], font))
-    return runs
+    return ImageFont.load_default()
 
 
 def _draw_text(image, entries, font_path: str | None, default_size: int):
-    """Render all Dashboard text through one Pillow path with CJK/Latin glyph fallback."""
+    """一次 PIL 转换完成一帧中全部文字，避免 OpenCV 中文乱码。"""
     canvas = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     drawer = ImageDraw.Draw(canvas)
-    primary_fonts: dict[int, ImageFont.FreeTypeFont] = {}
-    latin_fonts: dict[int, ImageFont.FreeTypeFont] = {}
-    symbol_fonts: dict[int, ImageFont.FreeTypeFont] = {}
+    fonts: dict[int, ImageFont.FreeTypeFont] = {}
     for position, text, color, font_size in entries:
         size = font_size or default_size
-        primary_font = primary_fonts.setdefault(size, _load_font(font_path, size))
-        latin_font = latin_fonts.setdefault(size, _load_latin_font(size))
-        symbol_font = symbol_fonts.setdefault(size, _load_symbol_font(size))
-        x, y = position
-        for run, font in _text_runs(text, primary_font, latin_font, symbol_font):
-            drawer.text((x, y), run, font=font, fill=color)
-            x += drawer.textlength(run, font=font)
+        font = fonts.setdefault(size, _load_font(font_path, size))
+        drawer.text(position, text, font=font, fill=color)
     return cv2.cvtColor(np.asarray(canvas), cv2.COLOR_RGB2BGR)
 
 
