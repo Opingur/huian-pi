@@ -1,0 +1,22 @@
+{
+  "device": "Huian_Loudao_01",
+  "camera_index": 0,
+  "model_path": "models/yolov8n.pt",
+  "confidence": 0.35,
+  "flow_window_seconds": 30,
+  "snapshot_interval_seconds": 1,
+  "conflict_people_per_region": 4,
+  "conflict_min_total": 10,
+  "warning_people": 8,
+  "danger_people": 16,
+  "smoke_fire_threshold": 1.0,
+  "temperature_fire_threshold": 60.0,
+  "crowd_index": {
+    "left_capacity": 8,
+    "right_capacity": 8,
+    "growth_rate_max": 0.5,
+    "weight_density": 0.5,
+    "weight_growth": 0.3,
+    "weight_conflict": 0.2
+  }
+}

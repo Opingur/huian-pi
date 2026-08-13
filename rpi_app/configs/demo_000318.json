@@ -1,0 +1,83 @@
+{
+  "device": "Huian_Loudao_01",
+  "source_type": "video",
+  "source": "../test_data/000318.mp4",
+  "model_path": "../models/yolov8n.pt",
+  "confidence": 0.35,
+  "output_dir": "output/demo_000318",
+  "output_video_name": "000318_annotated.mp4",
+  "display_window": false,
+  "save_annotated_video": true,
+  "flow_window_seconds": 30,
+  "snapshot_interval_seconds": 1,
+  "conflict_people_per_region": 4,
+  "conflict_min_total": 10,
+  "warning_people": 8,
+  "danger_people": 16,
+  "esp32_dry_run": true,
+  "prediction": {
+    "enabled": true,
+    "window_seconds": 15,
+    "min_samples": 5,
+    "min_history_seconds": 8,
+    "horizons": [
+      10,
+      20,
+      30
+    ],
+    "max_eta_seconds": 120
+  },
+  "tracking": {
+    "tracker": "bytetrack.yaml",
+    "trajectory_seconds": 2.0,
+    "min_track_age_seconds": 0.8,
+    "min_motion_distance_norm": 0.015
+  },
+  "conflict_zone": [],
+  "flow_analysis": {
+    "direction_bins": 8,
+    "convergence_min_group_people": 3,
+    "convergence_min_total_people": 6,
+    "convergence_min_angle_deg": 60,
+    "convergence_eta_seconds": 6.0,
+    "max_track_eta_seconds": 15.0,
+    "single_flow_min_people": 6,
+    "single_flow_min_dominance_ratio": 0.7
+  },
+  "alarm": {
+    "activation_hold_seconds": 1.0,
+    "release_hold_seconds": 1.5
+  },
+  "display": {
+    "layout": "dashboard",
+    "mode": "prediction",
+    "show_subtitle": false,
+    "subtitle_text": "????????",
+    "explain_track_id": null,
+    "explain_lock_seconds": 1.0,
+    "show_conflict_zone": false,
+    "show_flow_debug": false,
+    "show_track_stats": false,
+    "arrow_length_px": 48,
+    "font_path": null,
+    "font_size": 24,
+    "show_boxes": true,
+    "show_track_id": true,
+    "show_trajectory": true,
+    "show_direction_arrow": true
+  },
+  "crowd_index": {
+    "left_capacity": 8,
+    "right_capacity": 8,
+    "growth_rate_max": 0.5,
+    "weight_density": 0.5,
+    "weight_growth": 0.3,
+    "weight_conflict": 0.2,
+    "use_legacy_direction_conflict": false
+  },
+  "crowd_calibration": {
+    "calibrated": false,
+    "danger_people_threshold": null,
+    "calibration_source": "pending_real_stair_experiment"
+  }
+}

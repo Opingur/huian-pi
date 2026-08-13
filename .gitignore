@@ -1,0 +1,59 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime outputs
+rpi_app/output/
+output/
+logs/
+*.log
+
+# Temporary / cache
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# Model weights / large binaries
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+
+# Videos
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Local backups
+*.tar
+*.tar.gz
+*.zip
+
+# IDE
+.vscode/
+.idea/
+
+# Environment / secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Local validated backups
+backup_*/
+
+# Generated runs
+runs/
+
+# Accidental config copies
+*.jsonx

@@ -1,0 +1,118 @@
+{
+  "device": "Huian_Loudao_01",
+  "source_type": "camera",
+  "camera": {
+    "width": 1280,
+    "height": 720,
+    "format": "RGB888"
+  },
+  "model_path": "../models/yolov8n.pt",
+  "confidence": 0.35,
+  "output_dir": "output/rpi_imx219_live",
+  "display_window": true,
+  "save_annotated_video": false,
+  "flow_window_seconds": 30,
+  "snapshot_interval_seconds": 1,
+  "conflict_people_per_region": 4,
+  "conflict_min_total": 10,
+  "warning_people": 8,
+  "danger_people": 16,
+  "esp32": {
+    "enabled": true,
+    "dry_run": false,
+    "port": "/dev/ttyAMA0",
+    "baud": 115200,
+    "send_interval_seconds": 1.0,
+    "receive_enabled": true,
+    "status_timeout_seconds": 3.0
+  },
+  "prediction": {
+    "enabled": true,
+    "window_seconds": 15,
+    "min_samples": 5,
+    "min_history_seconds": 8,
+    "horizons": [
+      10,
+      20,
+      30
+    ],
+    "max_eta_seconds": 120
+  },
+  "tracking": {
+    "tracker": "bytetrack.yaml",
+    "trajectory_seconds": 2.0,
+    "min_track_age_seconds": 0.8,
+    "min_motion_distance_norm": 0.015
+  },
+  "conflict_zone": [],
+  "alarm": {
+    "activation_hold_seconds": 1.0,
+    "release_hold_seconds": 1.5
+  },
+  "display": {
+    "layout": "dashboard",
+    "mode": "live",
+    "show_subtitle": false,
+    "explain_track_id": null,
+    "explain_lock_seconds": 1.0,
+    "font_path": "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    "font_size": 24,
+    "arrow_length_px": 48,
+    "show_boxes": true,
+    "show_track_id": true,
+    "show_trajectory": true,
+    "show_direction_arrow": true,
+    "show_conflict_zone": false,
+    "fullscreen": true,
+    "window_name": "慧安安全监测系统"
+  },
+  "crowd_index": {
+    "left_capacity": 8,
+    "right_capacity": 8,
+    "growth_rate_max": 0.5,
+    "weight_density": 0.5,
+    "weight_growth": 0.3,
+    "weight_conflict": 0.2,
+    "use_legacy_direction_conflict": false
+  },
+  "flow_risk": {
+    "enabled": true,
+    "min_group_people": 2,
+    "min_total_people": 6,
+    "min_heading_difference_deg": 45,
+    "max_current_distance_norm": 0.42,
+    "max_future_distance_norm": 0.18,
+    "prediction_horizon_seconds": 2.0,
+    "max_convergence_eta_seconds": 3.0,
+    "convergence_score_threshold": 0.65,
+    "min_group_stability": 0.6,
+    "single_flow_min_people": 6,
+    "single_flow_min_dominance_ratio": 0.7,
+    "prediction_warning_people": 8
+  },
+  "fire_detection": {
+    "enabled": true,
+    "model_path": "../models/fire_n.pt",
+    "imgsz": 640,
+    "confidence": 0.18,
+    "interval_seconds": 1,
+    "tiled_inference": true,
+    "tile_rows": 2,
+    "tile_cols": 2,
+    "tile_overlap": 0.15,
+    "full_frame_pass": true,
+    "confirmation_hits": 2,
+    "confirmation_window": 4,
+    "release_hold_seconds": 2.0
+  },
+  "live_processing": {
+    "person_interval_seconds": 0.25,
+    "performance_log_enabled": true,
+    "performance_log_interval_seconds": 2
+  },
+  "crowd_calibration": {
+    "calibrated": false,
+    "danger_people_threshold": null,
+    "calibration_source": "pending_real_stair_experiment"
+  }
+}
