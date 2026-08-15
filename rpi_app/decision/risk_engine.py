@@ -14,7 +14,7 @@ def risk_from_crowd_index(crowd_index: float) -> RiskLevel:
         return "WARNING"
     if crowd_index < 0.8:
         return "CROWD"
-    return "DANGER"
+    return "CROWD"
 
 
 class RiskEngine:
@@ -35,8 +35,8 @@ class RiskEngine:
         """返回风险级别。
 
         固定双区域高占用已作为 crowd_index 的 conflict_score 参与计算。
-        保留人数兜底：8 人起至少 WARNING，16 人起固定 DANGER，故 DANGER
-        不会继续提升。occupancy_growth 参数仅为接口兼容。
+        保留人数兜底：8 人起至少 WARNING；legacy 的 danger_people 阈值到达后仍为 CROWD，
+        不与火警 DANGER 混用。occupancy_growth 参数仅为接口兼容。
         """
         _ = direction_conflict
         _ = occupancy_growth
@@ -47,7 +47,7 @@ class RiskEngine:
             level = risk_from_crowd_index(max(0.0, min(1.0, crowd_index)))
 
         if total_people >= self.danger_people:
-            return "DANGER"
+            return "CROWD"
         if total_people >= self.warning_people and level == "NORMAL":
             return "WARNING"
         return level

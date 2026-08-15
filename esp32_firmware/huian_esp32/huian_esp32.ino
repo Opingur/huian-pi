@@ -23,10 +23,12 @@
   温度：35.0 ℃
 
   最终状态语义：
-  绿色常亮：正常
-  黄色闪烁：拥挤/烟雾预警
-  红色闪烁 + 蜂鸣器持续报警：火警
-  紫色闪烁 + 静音：树莓派通信离线
+  NORMAL：绿灯常亮；蜂鸣器静音。
+  WARNING：蓝灯常亮；每约2.2秒短鸣一次。
+  CROWD：黄灯闪烁；150ms 响 / 150ms 停，连续快速短鸣。
+  DANGER：红灯 200ms 快速闪烁；蜂鸣器持续长鸣。
+  FIRE：独立确认火情内部状态；红灯 200ms 快速闪烁；蜂鸣器持续长鸣。
+  COMM_TIMEOUT：紫灯 350ms 闪烁；蜂鸣器静音。
 
   注意：
   上述阈值用于当前演示测试，
@@ -101,6 +103,7 @@ constexpr float TEMP_FIRE_TEST_THRESHOLD = 35.0F;
 enum class RouteState : uint8_t {
   NORMAL,
   WARNING,
+  CROWD,
   DANGER,
   FIRE
 };
@@ -109,9 +112,7 @@ enum class RouteState : uint8_t {
 enum class BuzzerMode : uint8_t {
   SILENT,
   WARNING,
-  ONE_DANGER,
-  MIXED_HIGH,
-  BOTH_DANGER,
+  CROWD,
   FIRE
 };
 
@@ -262,6 +263,10 @@ const char* stateText(RouteState state) {
     case RouteState::WARNING:
       return "WARNING";
 
+    case RouteState::CROWD:
+      return "CROWD";
+
+
     case RouteState::DANGER:
       return "DANGER";
 
@@ -278,56 +283,17 @@ const char* stateText(RouteState state) {
 // ==========================================================
 
 RouteState parseState(const char* raw) {
+  if (!raw) return RouteState::NORMAL;
 
-  if (!raw) {
-    return RouteState::NORMAL;
-  }
+  String state(raw);
+  state.trim();
+  state.toUpperCase();
 
-  String s(raw);
-
-  s.trim();
-  s.toUpperCase();
-
-
-  if (
-    s == "NORMAL" ||
-    s == "CLEAR"
-  ) {
-
-    return RouteState::NORMAL;
-  }
-
-
-  if (
-    s == "WARNING" ||
-    s == "ATTENTION" ||
-    s == "CROWD_WARNING"
-  ) {
-
-    return RouteState::WARNING;
-  }
-
-
-  if (
-    s == "CROWD" ||
-    s == "CROWDED" ||
-    s == "DANGER" ||
-    s == "CROWD_DANGER"
-  ) {
-
-    return RouteState::DANGER;
-  }
-
-
-  if (
-    s == "FIRE" ||
-    s == "FIRE_EMERGENCY"
-  ) {
-
-    return RouteState::FIRE;
-  }
-
-
+  if (state == "NORMAL" || state == "CLEAR") return RouteState::NORMAL;
+  if (state == "WARNING" || state == "ATTENTION") return RouteState::WARNING;
+  if (state == "CROWD" || state == "CROWDED" || state == "CROWD_WARNING" || state == "CROWD_DANGER") return RouteState::CROWD;
+  if (state == "DANGER") return RouteState::DANGER;
+  if (state == "FIRE" || state == "FIRE_EMERGENCY") return RouteState::FIRE;
   return RouteState::NORMAL;
 }
 
@@ -337,22 +303,13 @@ RouteState parseState(const char* raw) {
 // ==========================================================
 
 int stateRank(RouteState state) {
-
   switch (state) {
-
-    case RouteState::NORMAL:
-      return 0;
-
-    case RouteState::WARNING:
-      return 1;
-
-    case RouteState::DANGER:
-      return 2;
-
-    case RouteState::FIRE:
-      return 3;
+    case RouteState::NORMAL: return 0;
+    case RouteState::WARNING: return 1;
+    case RouteState::CROWD: return 2;
+    case RouteState::DANGER: return 3;
+    case RouteState::FIRE: return 4;
   }
-
   return 0;
 }
 
@@ -379,40 +336,16 @@ RouteState maxState(
 // ==========================================================
 
 const char* overallSystemState() {
+  if (fireEmergency) return "FIRE";
+  if (communicationOffline) return "COMM_TIMEOUT";
 
-  // 火警优先级最高，即使树莓派离线也必须报火警
-  if (fireEmergency) {
-    return "FIRE";
+  switch (maxState(finalLeft, finalRight)) {
+    case RouteState::NORMAL: return "NORMAL";
+    case RouteState::WARNING: return "WARNING";
+    case RouteState::CROWD: return "CROWD";
+    case RouteState::DANGER: return "DANGER";
+    case RouteState::FIRE: return "FIRE";
   }
-
-  // 树莓派通信超时：紫色闪烁、蜂鸣器静音
-  if (communicationOffline) {
-    return "COMM_TIMEOUT";
-  }
-
-  RouteState overall =
-    maxState(
-      finalLeft,
-      finalRight
-    );
-
-
-  switch (overall) {
-
-    case RouteState::NORMAL:
-      return "NORMAL";
-
-    case RouteState::WARNING:
-      return "WARNING";
-
-    case RouteState::DANGER:
-      return "DANGER";
-
-    case RouteState::FIRE:
-      return "FIRE";
-  }
-
-
   return "NORMAL";
 }
 
@@ -425,40 +358,16 @@ bool stateBlinkOn(
   RouteState state,
   uint32_t now
 ) {
-
   switch (state) {
-
-    // 正常：绿色常亮
     case RouteState::NORMAL:
-
-      return true;
-
-
-    // 黄色慢闪
     case RouteState::WARNING:
-
-      return
-        ((now / 600UL) % 2UL)
-        == 0UL;
-
-
-    // 红色快闪
+      return true;
+    case RouteState::CROWD:
+      return ((now / 350UL) % 2UL) == 0UL;
     case RouteState::DANGER:
-
-      return
-        ((now / 250UL) % 2UL)
-        == 0UL;
-
-
-    // 紫色快速闪
     case RouteState::FIRE:
-
-      return
-        ((now / 200UL) % 2UL)
-        == 0UL;
+      return ((now / 200UL) % 2UL) == 0UL;
   }
-
-
   return true;
 }
 
@@ -468,76 +377,17 @@ bool stateBlinkOn(
 // ==========================================================
 
 void showLeftState(RouteState state) {
-
-  uint32_t now = millis();
-
-  bool visible =
-    stateBlinkOn(
-      state,
-      now
-    );
-
-
-  if (!visible) {
-
-    setLeft(
-      false,
-      false,
-      false
-    );
-
+  if (!stateBlinkOn(state, millis())) {
+    setLeft(false, false, false);
     return;
   }
 
-
   switch (state) {
-
-    // 绿色
-    case RouteState::NORMAL:
-
-      setLeft(
-        false,
-        true,
-        false
-      );
-
-      break;
-
-
-    // 黄色 = 红 + 绿
-    case RouteState::WARNING:
-
-      setLeft(
-        true,
-        true,
-        false
-      );
-
-      break;
-
-
-    // 红色
+    case RouteState::NORMAL: setLeft(false, true, false); return;
+    case RouteState::WARNING: setLeft(false, false, true); return;
+    case RouteState::CROWD: setLeft(true, true, false); return;
     case RouteState::DANGER:
-
-      setLeft(
-        true,
-        false,
-        false
-      );
-
-      break;
-
-
-    // 火警：红色
-    case RouteState::FIRE:
-
-      setLeft(
-        true,
-        false,
-        false
-      );
-
-      break;
+    case RouteState::FIRE: setLeft(true, false, false); return;
   }
 }
 
@@ -547,72 +397,17 @@ void showLeftState(RouteState state) {
 // ==========================================================
 
 void showRightState(RouteState state) {
-
-  uint32_t now = millis();
-
-  bool visible =
-    stateBlinkOn(
-      state,
-      now
-    );
-
-
-  if (!visible) {
-
-    setRight(
-      false,
-      false,
-      false
-    );
-
+  if (!stateBlinkOn(state, millis())) {
+    setRight(false, false, false);
     return;
   }
 
-
   switch (state) {
-
-    case RouteState::NORMAL:
-
-      setRight(
-        false,
-        true,
-        false
-      );
-
-      break;
-
-
-    case RouteState::WARNING:
-
-      setRight(
-        true,
-        true,
-        false
-      );
-
-      break;
-
-
+    case RouteState::NORMAL: setRight(false, true, false); return;
+    case RouteState::WARNING: setRight(false, false, true); return;
+    case RouteState::CROWD: setRight(true, true, false); return;
     case RouteState::DANGER:
-
-      setRight(
-        true,
-        false,
-        false
-      );
-
-      break;
-
-
-    case RouteState::FIRE:
-
-      setRight(
-        true,
-        false,
-        false
-      );
-
-      break;
+    case RouteState::FIRE: setRight(true, false, false); return;
   }
 }
 
@@ -1310,90 +1105,17 @@ void evaluateRisk() {
 // ==========================================================
 
 BuzzerMode wantedBuzzerMode() {
+  if (fireEmergency) return BuzzerMode::FIRE;
+  if (communicationOffline) return BuzzerMode::SILENT;
 
-  if (
-    fireEmergency
-  ) {
-
-    return
-      BuzzerMode::FIRE;
+  switch (maxState(finalLeft, finalRight)) {
+    case RouteState::NORMAL: return BuzzerMode::SILENT;
+    case RouteState::WARNING: return BuzzerMode::WARNING;
+    case RouteState::CROWD: return BuzzerMode::CROWD;
+    case RouteState::DANGER:
+    case RouteState::FIRE: return BuzzerMode::FIRE;
   }
-
-  // 树莓派离线：紫色闪烁，但蜂鸣器保持静音
-  if (
-    communicationOffline
-  ) {
-
-    return
-      BuzzerMode::SILENT;
-  }
-
-
-  bool leftDanger =
-    finalLeft ==
-    RouteState::DANGER;
-
-  bool rightDanger =
-    finalRight ==
-    RouteState::DANGER;
-
-  bool leftWarning =
-    finalLeft ==
-    RouteState::WARNING;
-
-  bool rightWarning =
-    finalRight ==
-    RouteState::WARNING;
-
-
-  if (
-    leftDanger &&
-    rightDanger
-  ) {
-
-    return
-      BuzzerMode::BOTH_DANGER;
-  }
-
-
-  if (
-    (
-      leftDanger &&
-      rightWarning
-    ) ||
-    (
-      rightDanger &&
-      leftWarning
-    )
-  ) {
-
-    return
-      BuzzerMode::MIXED_HIGH;
-  }
-
-
-  if (
-    leftDanger ||
-    rightDanger
-  ) {
-
-    return
-      BuzzerMode::ONE_DANGER;
-  }
-
-
-  if (
-    leftWarning ||
-    rightWarning
-  ) {
-
-    return
-      BuzzerMode::WARNING;
-  }
-
-
-  return
-    BuzzerMode::SILENT;
+  return BuzzerMode::SILENT;
 }
 
 
@@ -1402,135 +1124,21 @@ BuzzerMode wantedBuzzerMode() {
 // ==========================================================
 
 void updateBuzzer() {
-
-  BuzzerMode wanted =
-    wantedBuzzerMode();
-
-
-  if (
-    wanted !=
-    currentBuzzerMode
-  ) {
-
-    currentBuzzerMode =
-      wanted;
-
-    buzzerModeStartMs =
-      millis();
-
+  BuzzerMode wanted = wantedBuzzerMode();
+  if (wanted != currentBuzzerMode) {
+    currentBuzzerMode = wanted;
+    buzzerModeStartMs = millis();
     buzzerWrite(false);
   }
 
-
-  uint32_t elapsed =
-    millis() -
-    buzzerModeStartMs;
-
-
-  bool on =
-    false;
-
-
-  switch (
-    currentBuzzerMode
-  ) {
-
-    // 正常
-    case BuzzerMode::SILENT:
-
-      on = false;
-
-      break;
-
-
-    // 黄色警告
-    // 每约2.2秒短响一次
-    case BuzzerMode::WARNING: {
-
-      uint32_t phase =
-        elapsed %
-        2200UL;
-
-      on =
-        phase <
-        180UL;
-
-      break;
-    }
-
-
-    // 单侧危险
-    // 3次快速短鸣
-    case BuzzerMode::ONE_DANGER: {
-
-      uint32_t phase =
-        elapsed %
-        1800UL;
-
-      on =
-        phase < 720UL &&
-        (
-          (
-            phase /
-            120UL
-          ) %
-          2UL
-          ==
-          0UL
-        );
-
-      break;
-    }
-
-
-    // 一侧危险 + 一侧警告
-    case BuzzerMode::MIXED_HIGH: {
-
-      uint32_t phase =
-        elapsed %
-        2300UL;
-
-      on =
-        phase < 1440UL &&
-        (
-          (
-            phase /
-            90UL
-          ) %
-          2UL
-          ==
-          0UL
-        );
-
-      break;
-    }
-
-
-    // 双侧危险
-    case BuzzerMode::BOTH_DANGER: {
-
-      uint32_t phase =
-        elapsed %
-        300UL;
-
-      on =
-        phase <
-        150UL;
-
-      break;
-    }
-
-
-    // 火情
-    // 持续报警
-    case BuzzerMode::FIRE:
-
-      on = true;
-
-      break;
+  uint32_t elapsed = millis() - buzzerModeStartMs;
+  bool on = false;
+  switch (currentBuzzerMode) {
+    case BuzzerMode::SILENT: on = false; break;
+    case BuzzerMode::WARNING: on = (elapsed % 2200UL) < 180UL; break;
+    case BuzzerMode::CROWD: on = (elapsed % 300UL) < 150UL; break;
+    case BuzzerMode::FIRE: on = true; break;
   }
-
-
   buzzerWrite(on);
 }
 
@@ -1864,6 +1472,17 @@ void printAndSendStatus() {
   );
 
   PiSerial.write(
+    '\n'
+  );
+
+  // Mirror the formal status JSON to USB for the Windows teaching console.
+  // PiSerial remains the production Raspberry Pi link.
+  serializeJson(
+    reply,
+    Serial
+  );
+
+  Serial.write(
     '\n'
   );
 }

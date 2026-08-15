@@ -38,9 +38,9 @@ def _write_summary(path: Path, summary: dict[str, object]) -> None:
 
 
 def _apply_flow_risk(base_risk: str, flow_metrics: dict[str, object]) -> str:
-    """Only verified spatial convergence can produce DANGER / red."""
+    """All people-flow risks use CROWD; fire is a separate ESP32 safety path."""
     if flow_metrics.get("convergence_risk"):
-        return "DANGER"
+        return "CROWD"
     if (
         base_risk in {"WARNING", "CROWD", "DANGER"}
         or flow_metrics.get("single_flow_crowd_risk")
@@ -52,7 +52,7 @@ def _apply_flow_risk(base_risk: str, flow_metrics: dict[str, object]) -> str:
 
 def _finalize_visual_alarm(vision_risk: str, debounced_alarm: str, alarm_reason: str) -> tuple[str, str, str]:
     if debounced_alarm == "RED":
-        return "DANGER", "RED", alarm_reason
+        return "CROWD", "YELLOW", alarm_reason
     if vision_risk in {"WARNING", "CROWD"}:
         return vision_risk, "YELLOW", "vision_risk_warning"
     return vision_risk, "NONE", "none"
@@ -130,7 +130,7 @@ class TrackedFrameProcessor:
         )
         vision_risk = _apply_flow_risk(base_risk, flow_metrics)
         debounced_alarm, alarm_reason = self.alarms.update(
-            source_timestamp, vision_risk == "CROWD", bool(flow_metrics["convergence_risk"]),
+            source_timestamp, vision_risk == "CROWD", False,
         )
         vision_risk, visual_alarm, alarm_reason = _finalize_visual_alarm(vision_risk, debounced_alarm, alarm_reason)
         status = self.build_status(self.config, trend, vision_risk, crowd_metrics, forecast)
