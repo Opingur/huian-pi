@@ -22,7 +22,7 @@ class ResearchStoreTests(unittest.TestCase):
         import sqlite3
         with sqlite3.connect(self.store.database_path) as connection:
             names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        self.assertEqual(names, {"experiments", "count_annotations"})
+        self.assertEqual(names, {"experiments", "count_annotations", "prediction_annotations"})
 
     def test_creates_and_reads_experiment(self) -> None:
         experiment_id = self.store.create_experiment("课堂练习", "raw.mp4", "teaching", "走廊场景")

@@ -1,17 +1,40 @@
 """Count-only Ground Truth page."""
 from __future__ import annotations
 import queue
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from teaching_console.services.research_count_service import ResearchCountService
+from teaching_console.services.research_prediction_analysis import AnalysisCancelled, PredictionTimelineAnalysis
+from teaching_console.services.research_prediction_service import ResearchPredictionService
 from teaching_console.services.research_store import ResearchStore
 from teaching_console.services.research_vision_service import ResearchVisionService
 from teaching_console.services.vision_teaching_service import VisionTeachingWorker
 
 
 TYPE_LABELS = {"teaching": "教学练习", "formal": "正式研究"}
+
+def format_prediction_slope(value):
+    """Render a prediction slope for the UI without changing stored data."""
+    return "暂无数据" if value is None else f"{float(value):+.3f}"
+
+
+def format_prediction_value(value):
+    """Render a predicted people count for the UI without changing stored data."""
+    return "暂无数据" if value is None else f"{float(value):.1f}"
+
+
+def format_prediction_error(value):
+    """Render one prediction absolute error for the UI."""
+    return "暂无数据" if value is None else f"{float(value):.1f}"
+
+
+def format_prediction_mae(value):
+    """Render an aggregate prediction MAE for the UI."""
+    return "暂无数据" if value is None else f"{float(value):.2f}"
+
 
 def experiment_list_rows(store):
     """UI-only projection; the UUID remains Treeview item data, not user text."""
@@ -22,21 +45,94 @@ def experiment_list_rows(store):
     return rows
 
 
+def prediction_target(anchor_time_seconds: float, horizon_seconds: int, fps: float) -> tuple[float, int]:
+    target_time = float(anchor_time_seconds) + int(horizon_seconds)
+    return target_time, int(round(target_time * fps))
+
+
 class ResearchPage(ttk.Frame):
     def __init__(self, master, root_path: Path) -> None:
         super().__init__(master)
-        self.root_path = root_path; self.store = ResearchStore(root_path); self.counts = ResearchCountService(self.store)
-        self.worker = VisionTeachingWorker(ResearchVisionService(root_path)); self.experiment = None; self.video = None; self.tasks=[]; self.index=0; self.token=0; self.busy=False; self.closing=False; self._detect_id=None; self._next_after_detect=None
+        self.root_path = root_path; self.store = ResearchStore(root_path); self.counts = ResearchCountService(self.store); self.predictions = ResearchPredictionService(self.store)
+        self.worker = VisionTeachingWorker(ResearchVisionService(root_path)); self.experiment = None; self.video = None; self.tasks=[]; self.index=0; self.token=0; self.busy=False; self.closing=False; self._prediction_target=None; self._prediction_photo=None; self._detect_id=None; self._next_after_detect=None; self.mode=tk.StringVar(value="count"); self.pred_index=0; self.pred_rows=[]; self.analysis_events=queue.Queue(); self.cancel_analysis=None
         self.gt=tk.StringVar(); self.note=tk.StringVar(); self.status=tk.StringVar(value="请新建或打开实验"); self.meta=tk.StringVar(); self.point=tk.StringVar(); self.result=tk.StringVar(); self.metrics=tk.StringVar(); self.jump=tk.StringVar()
         self._scroll(); self._build(); self.after(40,self._drain)
     def _scroll(self):
         self.canvas=tk.Canvas(self,highlightthickness=0); self.bar=ttk.Scrollbar(self,orient='vertical',command=self.canvas.yview); self.canvas.configure(yscrollcommand=self.bar.set); self.canvas.pack(side='left',fill='both',expand=True); self.bar.pack(side='right',fill='y'); self.body=ttk.Frame(self.canvas,padding=12); self.window=self.canvas.create_window((0,0),window=self.body,anchor='nw'); self.body.bind('<Configure>',lambda e:self.canvas.configure(scrollregion=self.canvas.bbox('all'))); self.canvas.bind('<Configure>',lambda e:self.canvas.itemconfigure(self.window,width=e.width)); self.bind('<Enter>',lambda e:self.canvas.bind_all('<MouseWheel>',self._wheel,add='+')); self.bind('<Leave>',lambda e:self.canvas.unbind_all('<MouseWheel>'))
     def _wheel(self,e): self.canvas.yview_scroll(-int(e.delta/120 or (1 if e.delta<0 else -1)),'units'); return 'break'
     def _build(self):
-        ttk.Label(self.body,text='研究记录 / Ground Truth',font=('Segoe UI',16,'bold')).pack(anchor='w'); ttk.Label(self.body,text='人工 Ground Truth：观察原始画面后独立记录真实人数。正式研究会先保存人工结果，再揭示系统结果。',wraplength=1050).pack(anchor='w')
-        top=ttk.Frame(self.body);top.pack(fill='x',pady=8);ttk.Button(top,text='新建实验',command=self.new).pack(side='left');ttk.Button(top,text='打开已有实验',command=self.open).pack(side='left',padx=5);ttk.Button(top,text='导出研究数据',command=self.export).pack(side='left');ttk.Label(top,textvariable=self.status).pack(side='right')
-        ttk.Label(self.body,textvariable=self.meta,wraplength=1050).pack(anchor='w'); body=ttk.Panedwindow(self.body,orient='horizontal');body.pack(fill='both',expand=True,pady=8);left,right=ttk.Frame(body),ttk.Frame(body);body.add(left,weight=3);body.add(right,weight=2);self.image=ttk.Label(left,text='选择实验后显示原始视频帧',anchor='center');self.image.pack(fill='both',expand=True); self._right(right)
-        bottom=ttk.LabelFrame(self.body,text='研究统计',padding=8);bottom.pack(fill='x');ttk.Label(bottom,textvariable=self.metrics).pack(anchor='w'); key=ttk.Frame(bottom);key.pack(anchor='w',pady=5);ttk.Entry(key,textvariable=self.jump,width=10).pack(side='left');ttk.Button(key,text='跳转秒数',command=self.jump_time).pack(side='left',padx=4);ttk.Button(key,text='添加当前时刻为关键样本',command=self.key).pack(side='left')
+        ttk.Label(self.body,text='研究记录 / Ground Truth',font=('Segoe UI',16,'bold')).pack(anchor='w'); modes=ttk.Frame(self.body);modes.pack(anchor='w',pady=(4,0));ttk.Radiobutton(modes,text='人数 Ground Truth',variable=self.mode,value='count',command=self.set_mode).pack(side='left');ttk.Radiobutton(modes,text='预测 Ground Truth',variable=self.mode,value='prediction',command=self.set_mode).pack(side='left',padx=12);ttk.Label(self.body,text='人工 Ground Truth：由观察者独立查看原始画面后记录真实人数。',wraplength=1050).pack(anchor='w');self.count_area=ttk.Frame(self.body);self.count_area.pack(fill='both',expand=True)
+        top=ttk.Frame(self.count_area);top.pack(fill='x',pady=8);ttk.Button(top,text='新建实验',command=self.new).pack(side='left');ttk.Button(top,text='打开已有实验',command=self.open).pack(side='left',padx=5);ttk.Button(top,text='导出研究数据',command=self.export).pack(side='left');ttk.Label(top,textvariable=self.status).pack(side='right')
+        ttk.Label(self.count_area,textvariable=self.meta,wraplength=1050).pack(anchor='w'); body=ttk.Panedwindow(self.count_area,orient='horizontal');body.pack(fill='both',expand=True,pady=8);left,right=ttk.Frame(body),ttk.Frame(body);body.add(left,weight=3);body.add(right,weight=2);self.image=ttk.Label(left,text='选择实验后显示原始视频帧',anchor='center');self.image.pack(fill='both',expand=True); self._right(right)
+        bottom=ttk.LabelFrame(self.count_area,text='研究统计',padding=8);bottom.pack(fill='x');ttk.Label(bottom,textvariable=self.metrics).pack(anchor='w'); key=ttk.Frame(bottom);key.pack(anchor='w',pady=5);ttk.Entry(key,textvariable=self.jump,width=10).pack(side='left');ttk.Button(key,text='跳转秒数',command=self.jump_time).pack(side='left',padx=4);ttk.Button(key,text='添加当前时刻为关键样本',command=self.key).pack(side='left')
+        self._build_prediction()
+
+    def _build_prediction(self):
+        self.pred_area=ttk.Frame(self.body, padding=(0,8)); self.pred_status=tk.StringVar(); self.pred_info=tk.StringVar(); self.pred_metrics=tk.StringVar(); self.pred_gt={h:tk.StringVar() for h in (10,20,30)}; self.pred_error={h:tk.StringVar(value="绝对误差：暂无数据") for h in (10,20,30)}
+        ttk.Label(self.pred_area,text='预测 Ground Truth',font=('Segoe UI',13,'bold')).pack(anchor='w'); ttk.Label(self.pred_area,textvariable=self.pred_status,wraplength=1000).pack(anchor='w',pady=4); preview=ttk.LabelFrame(self.pred_area,text='Ground Truth 原始画面',padding=6);preview.pack(fill='both',expand=True,pady=4);self.pred_view_label=tk.StringVar(value='当前查看：尚未选择未来验证时刻');ttk.Label(preview,textvariable=self.pred_view_label).pack(anchor='w');self.pred_image=ttk.Label(preview,text='点击“查看原始画面”后显示目标帧',anchor='center');self.pred_image.pack(fill='both',expand=True)
+        self.analyze_button=ttk.Button(self.pred_area,text='分析视频并生成预测实验点',command=self.start_prediction_analysis);self.analyze_button.pack(anchor='w'); self.cancel_button=ttk.Button(self.pred_area,text='取消分析',command=self.cancel_prediction_analysis); self.cancel_button.pack(anchor='w',pady=3)
+        ttk.Label(self.pred_area,textvariable=self.pred_info,wraplength=1000).pack(anchor='w',pady=6); self.pred_form=ttk.Frame(self.pred_area);self.pred_form.pack(fill='x')
+        for h in (10,20,30):
+            row=ttk.LabelFrame(self.pred_form,text=f'+{h} 秒验证',padding=6);row.pack(fill='x',pady=3); ttk.Label(row,text=f'人工真实人数：').pack(side='left');ttk.Entry(row,textvariable=self.pred_gt[h],width=10).pack(side='left');ttk.Button(row,text='查看原始画面',command=lambda x=h:self.view_prediction_target(x)).pack(side='left',padx=5);ttk.Button(row,text='引用已有人数 Ground Truth',command=lambda x=h:self.reference_count_gt(x)).pack(side='left');ttk.Label(row,textvariable=self.pred_error[h]).pack(side='left',padx=8)
+        nav=ttk.Frame(self.pred_area);nav.pack(anchor='w',pady=6);ttk.Button(nav,text='上一个预测点',command=lambda:self.show_prediction(self.pred_index-1)).pack(side='left');ttk.Button(nav,text='保存预测验证',command=self.save_prediction).pack(side='left',padx=4);ttk.Button(nav,text='保存并下一个预测点',command=lambda:self.save_prediction(True)).pack(side='left');ttk.Button(nav,text='下一个预测点',command=lambda:self.show_prediction(self.pred_index+1)).pack(side='left',padx=4);ttk.Label(self.pred_area,textvariable=self.pred_metrics,wraplength=1000).pack(anchor='w')
+    def set_mode(self):
+        if self.mode.get()=='prediction': self.count_area.pack_forget();self.pred_area.pack(fill='both',expand=True);self.refresh_prediction()
+        else: self.pred_area.pack_forget();self._prediction_target=None;self.count_area.pack(fill='both',expand=True)
+    def refresh_prediction(self):
+        if not self.experiment:return
+        self.pred_rows=self.store.prediction_annotations(self.experiment['id']);m=self.predictions.prediction_metrics(self.experiment['id']);self.pred_metrics.set(f"预测实验点：{m['prediction_anchor_count']}  完整验证：{m['completed_prediction_count']} / {m['prediction_anchor_count']}  | +10：{m['samples_10']}，MAE {format_prediction_mae(m['mae_10'])} 人  | +20：{m['samples_20']}，MAE {format_prediction_mae(m['mae_20'])} 人  | +30：{m['samples_30']}，MAE {format_prediction_mae(m['mae_30'])} 人")
+        if self.pred_rows:self.show_prediction(self.pred_index)
+        else:self.pred_status.set('当前实验尚未生成预测研究数据。预测需要连续分析视频，不能只随机查看一帧。')
+    def show_prediction(self,index):
+        if not self.pred_rows:return
+        self.pred_index=max(0,min(index,len(self.pred_rows)-1));a=self.pred_rows[self.pred_index];done=all(a[f'gt_{h}'] is not None for h in (10,20,30));self.pred_status.set(f"预测验证：{self.pred_index+1} / {len(self.pred_rows)}  {'✓ 已完成' if done else '○ 未完成'}")
+        self.pred_info.set(f"预测起点：{a['anchor_time_seconds']:.1f} s  | 当时系统人数：{a['current_system_count']}  | 趋势斜率：{format_prediction_slope(a['prediction_slope'])} 人/秒\n这些预测值是在预测起点产生并冻结保存的历史预测结果。\n+10：{format_prediction_value(a['prediction_10'])} 人  +20：{format_prediction_value(a['prediction_20'])} 人  +30：{format_prediction_value(a['prediction_30'])} 人")
+        for h in (10,20,30):
+            self.pred_gt[h].set('' if a[f'gt_{h}'] is None else str(a[f'gt_{h}']))
+            self.pred_error[h].set(f"绝对误差：{format_prediction_error(a[f'error_{h}'])} 人")
+    def start_prediction_analysis(self):
+        if not self.experiment or self.cancel_analysis:return
+        path=Path(self.experiment['video_path'])
+        if not path.is_file():self.pred_status.set('原始视频文件不存在。');return
+        self.cancel_analysis=threading.Event();self.analyze_button.state(['disabled']);self.pred_status.set('正在分析视频……')
+        def run():
+            try:
+                timeline=PredictionTimelineAnalysis(self.root_path).analyze(path,progress=lambda done,total:self.analysis_events.put(('progress',done,total)),cancel_event=self.cancel_analysis);self.analysis_events.put(('done',timeline))
+            except AnalysisCancelled:self.analysis_events.put(('cancel',))
+            except Exception as error:self.analysis_events.put(('error',str(error)))
+        threading.Thread(target=run,name='prediction-analysis',daemon=True).start();self.after(80,self._drain_analysis)
+    def _drain_analysis(self):
+        try:
+            while True:
+                event=self.analysis_events.get_nowait()
+                if event[0]=='progress':self.pred_status.set(f'正在分析视频…… {event[1]} / {event[2]} 帧  {event[1]*100//max(1,event[2])}%')
+                elif event[0]=='done':
+                    duration=self.video.total_frames/self.video.fps if self.video else 0;self.pred_rows=self.predictions.generate_anchors(self.experiment['id'],event[1],duration);self.cancel_analysis=None;self.analyze_button.state(['!disabled']);self.refresh_prediction();
+                    if not self.pred_rows:self.pred_status.set('该视频虽然产生了预测，但没有足够的未来30秒时间用于完整 +10/+20/+30 验证。建议使用更长的视频进行正式预测研究。')
+                else:self.cancel_analysis=None;self.analyze_button.state(['!disabled']);self.pred_status.set('预测分析已取消。' if event[0]=='cancel' else '分析错误：'+event[1])
+        except queue.Empty:pass
+        if self.cancel_analysis:self.after(80,self._drain_analysis)
+    def cancel_prediction_analysis(self):
+        if self.cancel_analysis:self.cancel_analysis.set()
+    def view_prediction_target(self,h):
+        if not self.pred_rows:return
+        a=self.pred_rows[self.pred_index];target_time,frame=prediction_target(a['anchor_time_seconds'],h,self.video.fps);self._prediction_target=(h,target_time,frame);self._send('read_raw',frame);self.pred_view_label.set(f'当前查看：+{h}秒 Ground Truth  |  目标时间：{target_time:.2f} s  |  帧号：{frame}');self.pred_status.set('请观察原始画面，人工记录该时刻真实人数。')
+    def reference_count_gt(self,h):
+        if not self.pred_rows:return
+        a=self.pred_rows[self.pred_index];value=self.predictions.apply_existing_count_gt(a['id'],h)
+        if value is None:messagebox.showinfo('预测 Ground Truth','该时刻没有可引用的人工 Ground Truth。',parent=self)
+        else:self.pred_gt[h].set(str(value));self.refresh_prediction()
+    def save_prediction(self,next=False):
+        if not self.pred_rows:return
+        a=self.pred_rows[self.pred_index]
+        try:
+            for h in (10,20,30):
+                value=self.pred_gt[h].get().strip()
+                if value:self.predictions.save_prediction_gt(a['id'],h,int(value))
+        except (ValueError,TypeError):messagebox.showwarning('输入错误','人工真实人数必须是非负整数。',parent=self);return
+        self.refresh_prediction()
+        if next:self.show_prediction(self.pred_index+1)
+
     def _right(self,p):
         ttk.Label(p,text='当前实验点',font=('Segoe UI',12,'bold')).pack(anchor='w');ttk.Label(p,textvariable=self.point).pack(anchor='w');ttk.Label(p,textvariable=self.result,wraplength=380).pack(anchor='w',pady=5);ttk.Label(p,text='人工真实人数：').pack(anchor='w');ttk.Entry(p,textvariable=self.gt,width=12).pack(anchor='w');ttk.Label(p,text='备注：').pack(anchor='w');ttk.Entry(p,textvariable=self.note,width=38).pack(anchor='w');buttons=ttk.Frame(p);buttons.pack(anchor='w',pady=8);ttk.Button(buttons,text='上一实验点',command=lambda:self.show(self.index-1)).pack(side='left');ttk.Button(buttons,text='保存',command=self.save).pack(side='left',padx=3);ttk.Button(buttons,text='保存并下一个',command=lambda:self.save(True)).pack(side='left');ttk.Button(buttons,text='下一实验点',command=lambda:self.show(self.index+1)).pack(side='left',padx=3);ttk.Button(p,text='运行系统检测',command=self.detect).pack(anchor='w')
     def new(self):
@@ -82,7 +178,7 @@ class ResearchPage(ttk.Frame):
         return frames/fps,fps
     def load(self,eid):
         self.experiment=self.store.get_experiment(eid);self.tasks=self.store.annotations(eid);self.index=0;path=Path(self.experiment['video_path']);self.meta.set(f"实验：{self.experiment['name']}  | 类型：{self.experiment['experiment_type']}  | 视频：{path}")
-        if not path.is_file():self.status.set('原始视频文件不存在；数据库内容仍可查看');return
+        if not path.is_file():self.status.set('原始视频文件不存在；数据库内容仍可查看');self.refresh_prediction();return
         self._send('open_video',path)
     def _send(self,op,*args):self.token+=1;self.busy=True;self.worker.submit(self.token,op,*args)
     def _drain(self):
@@ -93,7 +189,7 @@ class ResearchPage(ttk.Frame):
             if r.token!=self.token:continue
             self.busy=False
             if r.error:self.status.set('错误：'+r.error);continue
-            if r.operation=='open_video':self.video=r.value;self.show(0)
+            if r.operation=='open_video':self.video=r.value;self.show(0);self.refresh_prediction()
             else:self.render(r.value)
         self.after(40,self._drain)
     def show(self,i):
@@ -102,8 +198,14 @@ class ResearchPage(ttk.Frame):
     def render(self,p):
         try:
             from PIL import Image,ImageTk
-            im=Image.fromarray(p.frame_bgr[:,:,::-1]);im.thumbnail((640,420));self.photo=ImageTk.PhotoImage(im);self.image.configure(image=self.photo,text='')
-        except Exception as e:self.image.configure(text=str(e),image='')
+            im=Image.fromarray(p.frame_bgr[:,:,::-1]);im.thumbnail((640,420))
+            if self.mode.get() == 'prediction' and self._prediction_target is not None:
+                self._prediction_photo=ImageTk.PhotoImage(im);self.pred_image.configure(image=self._prediction_photo,text='')
+            else:
+                self.photo=ImageTk.PhotoImage(im);self.image.configure(image=self.photo,text='')
+        except Exception as e:
+            target=self.pred_image if self.mode.get() == 'prediction' and self._prediction_target is not None else self.image
+            target.configure(text=str(e),image='')
         if p.mode=='detect':
             target=self._detect_id or self.tasks[self.index]['id'];self.store.update_system_count(target,len(p.rows));self.tasks=self.store.annotations(self.experiment['id']);a=self.tasks[self.index];self.result.set(f"系统人数：{len(p.rows)}；人工人数：{a['ground_truth_count'] if a['ground_truth_count'] is not None else '—'}；绝对误差：{a['absolute_error'] if a['absolute_error'] is not None else '—'}");self.refresh()
             if self._next_after_detect is not None:
@@ -136,4 +238,7 @@ class ResearchPage(ttk.Frame):
     def export(self):
         if not self.experiment:return
         out=self.counts.export_experiment(self.experiment['id'],self.root_path/'validation'/'exports');messagebox.showinfo('导出完成',f"导出完成：\n{out.relative_to(self.root_path)}",parent=self)
-    def close(self):self.closing=True;self.worker.close()
+    def close(self):
+        self.closing=True
+        if self.cancel_analysis:self.cancel_analysis.set()
+        self.worker.close()
