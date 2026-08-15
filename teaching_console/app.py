@@ -10,6 +10,7 @@ from tkinter import messagebox, ttk
 from teaching_console.pages.esp32_page import Esp32Page
 from teaching_console.pages.overview_page import OverviewPage
 from teaching_console.pages.source_map_page import SourceMapPage
+from teaching_console.pages.vision_tracking_page import VisionTrackingPage
 from teaching_console.project_paths import check_project, project_root
 
 
@@ -19,7 +20,7 @@ class TeachingConsoleApp(tk.Tk):
         self.root_path = project_root()
         self.project_check = check_project(self.root_path)
         self.title("慧安楼道｜教学与调试台")
-        self.geometry("1200x800")
+        self.geometry("1200x830")
         self.minsize(960, 620)
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.project_status = tk.StringVar()
@@ -43,6 +44,7 @@ class TeachingConsoleApp(tk.Tk):
         self.pages = {
             "系统总览": OverviewPage(content, self.root_path),
             "源码地图": SourceMapPage(content, self.root_path, self.open_source, self.open_directory, self.copy_path),
+            "YOLO / Tracking": VisionTrackingPage(content, self.root_path, self.open_source, self.copy_path),
             "ESP32实验": Esp32Page(content, self.connection_changed),
         }
         for title in self.pages:
@@ -82,5 +84,7 @@ class TeachingConsoleApp(tk.Tk):
 
     def _close(self) -> None:
         page = self.pages.get("ESP32实验")
+        if page is not None: page.close()
+        page = self.pages.get("YOLO / Tracking")
         if page is not None: page.close()
         self.destroy()

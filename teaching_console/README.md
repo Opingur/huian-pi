@@ -66,4 +66,27 @@ ESP32 拔掉或串口异常时，后台读取线程会记录错误并把界面�
 
 ## 本阶段未做
 
-YOLO 图片实时实验、视频播放器、ByteTrack 动画、轨迹 Canvas、趋势 / Crowd Index 权重交互、Ground Truth 编辑器、EXE 打包和主题美化均未包含。
+视频播放器、ByteTrack 动画、轨迹 Canvas、趋势 / Crowd Index 权重交互、Ground Truth 编辑器、EXE 打包和主题美化均未包含。
+
+## 第二阶段：YOLO / Tracking 实验
+
+启动后打开“YOLO / Tracking”页。默认示例是仓库输入视频 `test_data/000327.mp4`；该页不会使用 `final_dashboard_videos/` 中的渲染结果。也可以选择本地 `.mp4/.avi/.mov/.mkv` 视频。
+
+固定教学案例全部是可重新推理的原始输入，选择后会在页内显示案例编号和用途：
+
+- `000318`：人数增长（`test_data/iitb_final/000318.mp4`）
+- `000327`：目标跟踪 / Track ID（`test_data/000327.mp4`，默认）
+- `000345`：人数下降（`test_data/iitb_final/000345.mp4`）
+- `000353`：增长 / 趋势（`test_data/iitb_final/000353.mp4`）
+
+这些路径也分别被 `rpi_app/configs/final_dashboard_*.json` 作为处理前的 `source`；教学页仅读取原始视频帧，再由当前模型产生新的框、置信度和 Track ID。
+
+- **原始画面**：只读取视频帧，不加载 YOLO。
+- **YOLO 检测**：真实调用 `rpi_app/vision/detector.py` 的 `PersonDetector.detect()`，每帧独立输出 person 边界框和置信度。
+- **YOLO + ByteTrack**：真实调用 `rpi_app/vision/tracker.py` 的 `PersonTracker.track()`；该封装内部完成 YOLO person 检测和 `model.track(..., persist=True)`，输出边界框、置信度、Track ID 和底部中心点。
+
+检测与追踪是两条不同的真实 API 入口，教学台不会把 `PersonDetector.detect()` 的结果再交给 `PersonTracker.track()`。模型路径、`confidence` 和 `tracker` 都读取 `rpi_app/config.json`；模型只在第一次进入检测/追踪模式时加载，找不到模型时会提示且**不会自动下载**。
+
+使用“上一帧 / 下一帧 / 播放 / 拖动进度条”观察过程。进入追踪模式后，换视频、切换模式、回退或不连续跳转都会重置 ByteTrack；因此 Track ID 可能重新编号，且 Track ID 只代表当前连续视频段内的临时关联，**不是身份识别**。当前帧没有 person 时，结果表会明确清空，不显示上一帧残留数据。
+
+页面把 OpenCV/YOLO 工作放入一个后台 worker，并以队列交回 Tk 主线程绘制；关闭窗口时会请求 worker 关闭视频资源。测试使用 fake video / fake model，不连接串口、不枚举 COM 口、不加载权重。
