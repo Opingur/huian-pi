@@ -11,6 +11,7 @@ from teaching_console.pages.esp32_page import Esp32Page
 from teaching_console.pages.overview_page import OverviewPage
 from teaching_console.pages.source_map_page import SourceMapPage
 from teaching_console.pages.trajectory_direction_page import TrajectoryDirectionPage
+from teaching_console.pages.trend_crowd_page import TrendCrowdPage
 from teaching_console.pages.research_page import ResearchPage
 from teaching_console.pages.vision_tracking_page import VisionTrackingPage
 from teaching_console.project_paths import check_project, project_root
@@ -48,6 +49,7 @@ class TeachingConsoleApp(tk.Tk):
             "源码地图": SourceMapPage(content, self.root_path, self.open_source, self.open_directory, self.copy_path),
             "YOLO / Tracking": VisionTrackingPage(content, self.root_path, self.open_source, self.copy_path),
             "轨迹 / Direction": TrajectoryDirectionPage(content, self.root_path, self.open_source, self.copy_path),
+            "趋势 / Crowd Index": TrendCrowdPage(content, self.root_path, self.open_source, self.copy_path),
             "研究记录 / Ground Truth": ResearchPage(content, self.root_path),
             "ESP32实验": Esp32Page(content, self.connection_changed),
         }
@@ -92,6 +94,8 @@ class TeachingConsoleApp(tk.Tk):
         page = self.pages.get("YOLO / Tracking")
         if page is not None: page.close()
         page = self.pages.get("轨迹 / Direction")
+        if page is not None: page.close()
+        page = self.pages.get("趋势 / Crowd Index")
         if page is not None: page.close()
         page = self.pages.get("研究记录 / Ground Truth")
         if page is not None: page.close()
