@@ -6,12 +6,18 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from teaching_console.runtime_paths import ensure_writable_data_root
 
 
 DEFAULT_PI_URL = "http://huian-pi.local:8765"
+_DIRECT_OPENER = build_opener(ProxyHandler({}))
+
+
+def direct_urlopen(request: Request, *, timeout: float):
+    """Reach a local/Tailscale Pi directly even when Windows has a global proxy."""
+    return _DIRECT_OPENER.open(request, timeout=timeout)
 
 
 class TeacherRemoteError(RuntimeError):
@@ -48,10 +54,10 @@ class TeacherRemoteSettingsStore:
 
 
 class TeacherRemoteClient:
-    def __init__(self, base_url: str, *, timeout_seconds: float = 1.5, opener: Callable[..., Any] = urlopen) -> None:
+    def __init__(self, base_url: str, *, timeout_seconds: float = 1.5, opener: Callable[..., Any] | None = None) -> None:
         self.base_url = normalize_base_url(base_url)
         self.timeout_seconds = float(timeout_seconds)
-        self.opener = opener
+        self.opener = opener or direct_urlopen
 
     def _request(self, path: str, *, method: str = "GET", body: Mapping[str, object] | None = None, binary: bool = False):
         data = None if body is None else json.dumps(dict(body), ensure_ascii=False).encode("utf-8")

@@ -7,7 +7,7 @@ from urllib.error import URLError
 from teaching_console.pages.demo_showcase_page import demo_state_text
 from teaching_console.services.teacher_remote_service import (
     DEFAULT_PI_URL, TeacherRemoteClient, TeacherRemoteError, TeacherRemoteSettings, TeacherRemoteSettingsStore,
-    demo_case_row, live_status_rows, normalize_base_url,
+    demo_case_row, direct_urlopen, live_status_rows, normalize_base_url,
 )
 
 
@@ -26,6 +26,10 @@ class TeacherRemoteClientTests(unittest.TestCase):
             store = TeacherRemoteSettingsStore(Path(directory))
             store.save(TeacherRemoteSettings("100.70.1.2:8765"))
             self.assertEqual(store.load().base_url, "http://100.70.1.2:8765")
+
+    def test_default_client_bypasses_windows_proxy(self):
+        client = TeacherRemoteClient("100.111.124.9:8765")
+        self.assertIs(client.opener, direct_urlopen)
 
     def test_json_frame_and_post_commands(self):
         calls = []
