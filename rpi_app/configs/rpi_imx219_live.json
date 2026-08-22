@@ -110,6 +110,10 @@
     "performance_log_enabled": true,
     "performance_log_interval_seconds": 2
   },
+  "teacher_runtime": {
+    "enabled": true,
+    "interval_seconds": 0.25
+  },
   "crowd_calibration": {
     "calibrated": false,
     "danger_people_threshold": null,

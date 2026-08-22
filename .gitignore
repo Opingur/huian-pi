@@ -68,3 +68,7 @@ huian_teaching_data/
 training_packages/
 datasets/
 models/experiments/
+# Large generated teacher demo cases
+demo_cases/*
+!demo_cases/README.md
+teacher_remote.json

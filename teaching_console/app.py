@@ -15,6 +15,8 @@ from teaching_console.pages.trajectory_direction_page import TrajectoryDirection
 from teaching_console.pages.trend_crowd_page import TrendCrowdPage
 from teaching_console.pages.research_page import ResearchPage
 from teaching_console.pages.vision_tracking_page import VisionTrackingPage
+from teaching_console.pages.live_system_page import LiveSystemPage
+from teaching_console.pages.demo_showcase_page import DemoShowcasePage
 from teaching_console.project_paths import check_project, project_root
 from teaching_console.services.source_opening import open_source_file, pyinstaller_source_notice
 from teaching_console.ui_zoom import ZoomManager
@@ -54,8 +56,11 @@ class TeachingConsoleApp(tk.Tk):
         nav = ttk.Frame(shell, padding=10); nav.pack(side="left", fill="y")
         ttk.Label(nav, text="导航", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
         content = ttk.Frame(shell); content.pack(side="left", fill="both", expand=True)
+        self._visible_page = None
         self.pages = {
             "系统总览": OverviewPage(content, self.root_path),
+            "实时系统": LiveSystemPage(content, self.root_path),
+            "展示演示": DemoShowcasePage(content, self.root_path),
             "源码地图": SourceMapPage(content, self.root_path, self.open_source, self.open_directory, self.copy_path),
             "YOLO / Tracking": VisionTrackingPage(content, self.root_path, self.open_source, self.copy_path),
             "轨迹 / Direction": TrajectoryDirectionPage(content, self.root_path, self.open_source, self.copy_path),
@@ -71,8 +76,14 @@ class TeachingConsoleApp(tk.Tk):
         self.show("系统总览")
 
     def show(self, name: str) -> None:
+        if self._visible_page is not None:
+            callback = getattr(self._visible_page, "on_hide", None)
+            if callback is not None: callback()
         for page in self.pages.values(): page.pack_forget()
         self.pages[name].pack(fill="both", expand=True)
+        self._visible_page = self.pages[name]
+        callback = getattr(self._visible_page, "on_show", None)
+        if callback is not None: callback()
 
     def _notify_pages_of_zoom(self, factor: float) -> None:
         for page in self.pages.values():
@@ -110,16 +121,8 @@ class TeachingConsoleApp(tk.Tk):
             messagebox.showerror("无法打开", str(error), parent=self)
 
     def _close(self) -> None:
-        page = self.pages.get("ESP32实验")
-        if page is not None: page.close()
-        page = self.pages.get("YOLO / Tracking")
-        if page is not None: page.close()
-        page = self.pages.get("轨迹 / Direction")
-        if page is not None: page.close()
-        page = self.pages.get("趋势 / Crowd Index")
-        if page is not None: page.close()
-        page = self.pages.get("研究记录 / Ground Truth")
-        if page is not None: page.close()
-        page = self.pages.get("模型优化 / YOLO Fine-tune")
-        if page is not None: page.close()
+        for page in self.pages.values():
+            callback = getattr(page, "close", None)
+            if callback is not None:
+                callback()
         self.destroy()

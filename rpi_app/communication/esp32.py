@@ -192,6 +192,10 @@ class ESP32Publisher:
                 f"Unable to open ESP32 serial port {self.port!r} at {self.baud} baud: {error}"
             ) from error
 
+    def reset_send_interval(self) -> None:
+        """Allow a replayed source-time timeline to send its initial status immediately."""
+        self._last_sent_at = None
+
     def close(self) -> None:
         if self._serial is not None:
             try:

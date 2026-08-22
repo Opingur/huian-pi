@@ -26,6 +26,7 @@ from vision.people_flow import PeopleFlowAnalyzer
 from vision.running_detector import RunningDetector, aggregate_running
 from vision.tracker import PersonTracker
 from sources.video_source import VideoSource
+from services.runtime_snapshot import RuntimeSnapshotPublisher
 from vision.trajectory import TrajectoryAnalyzer
 
 
@@ -85,6 +86,7 @@ class TrackedFrameProcessor:
         self.alarms = AlarmDebouncer(config["alarm"])
         self.explain_lock = ExplainTargetLock(config.get("display", {}).get("explain_lock_seconds", 1.0))
         self.publisher = ESP32Publisher(config.get("esp32"), legacy_dry_run=bool(config.get("esp32_dry_run", True)))
+        self.runtime_snapshot = RuntimeSnapshotPublisher.from_config(config.get("teacher_runtime"))
         self.esp32_status = None
         self.esp32_status_stale = True
         self.fire_detector = FireDetector(config.get("fire_detection", {}))
@@ -160,6 +162,12 @@ class TrackedFrameProcessor:
     def _render(self, frame_bgr, analysis: dict[str, object], fire_status: dict[str, object]) -> tuple[object, dict[str, object], bool]:
         status = dict(analysis["status"])
         status.update(fire_status)
+        status.update({
+            "mode": "live",
+            "camera_online": str(self.config.get("source_type", "")).lower() == "camera",
+            "esp32_online": bool(self.esp32_status and not self.esp32_status_stale),
+            "current_event": status.get("alarm_reason") or "正常监测",
+        })
         annotated = draw_dashboard(
             frame_bgr, analysis["tracks"], status,
             conflict_zone=self.config.get("conflict_zone", []),
@@ -179,6 +187,7 @@ class TrackedFrameProcessor:
                 "esp32_configured": self.publisher.enabled and not self.publisher.dry_run,
             },
         )
+        self.runtime_snapshot.publish(status, annotated, source_time=float(status.get("source_time", 0.0)))
         return annotated, status, bool(analysis["snapshot_saved"])
 
     def process_frame(self, frame_bgr, source_timestamp: float) -> tuple[object, dict[str, object], bool]:
