@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -57,3 +57,14 @@ runs/
 
 # Accidental config copies
 *.jsonx
+
+# Build and user-generated teaching data
+build/
+dist/
+annotation_frames/
+validation/exports/
+validation/research_data/
+huian_teaching_data/
+training_packages/
+datasets/
+models/experiments/

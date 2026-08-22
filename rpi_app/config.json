@@ -1,10 +1,10 @@
 {
   "device": "Huian_Loudao_01",
   "source_type": "image",
-  "source": "../test_data/people.jpg",
+  "source": "../test_data/images/bus.jpg",
   "model_path": "../models/yolov8n.pt",
   "confidence": 0.35,
-  "output_dir": "output",
+  "output_dir": "../output",
   "display_window": false,
   "save_annotated_video": false,
   "flow_window_seconds": 30,
@@ -103,6 +103,16 @@
     "interval_seconds": 1,
     "confirmation_hits": 2,
     "confirmation_window": 3
+  },
+  "running_detection": {
+    "window_seconds": 0.8,
+    "enter_threshold": 1.2,
+    "exit_threshold": 0.65,
+    "confirm_seconds": 0.35,
+    "release_seconds": 0.45,
+    "minimum_track_history": 0.5,
+    "max_sample_speed": 5.0,
+    "calibration_status": "candidate_test_thresholds_pending_real_running_ground_truth"
   },
   "crowd_calibration": {
     "calibrated": false,

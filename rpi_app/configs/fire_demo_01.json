@@ -8,7 +8,7 @@
   },
   "model_path": "../models/yolov8n.pt",
   "confidence": 0.35,
-  "output_dir": "output/fire_demo_01_ui_final",
+  "output_dir": "../output/fire_demo_01_ui_final",
   "display_window": false,
   "save_annotated_video": true,
   "flow_window_seconds": 30,

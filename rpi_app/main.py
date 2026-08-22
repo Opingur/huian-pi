@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import cv2
+
+
+APP_DIR = Path(__file__).resolve().parent
+if str(APP_DIR) not in sys.path:
+    # Existing modules use the deployed `rpi_app` directory as their import root.
+    # This also makes `python -m rpi_app.main` work from the project root.
+    sys.path.insert(0, str(APP_DIR))
 
 from communication.esp32 import ESP32Publisher
 from decision.crowd_index import calculate_crowd_index
@@ -106,7 +114,7 @@ def run_image(config: dict[str, Any], source_path: Path, output_dir: Path) -> No
 
 def _run_config(config: dict[str, Any]) -> None:
     source_type = str(config["source_type"]).lower()
-    output_dir = resolve_app_path(config.get("output_dir", "output"))
+    output_dir = resolve_app_path(config.get("output_dir", "../output"))
     output_dir.mkdir(parents=True, exist_ok=True)
     if source_type == "camera":
         run_picamera2_camera(config, output_dir, build_status)

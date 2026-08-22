@@ -4,7 +4,7 @@
   "source": "../test_data/000327.mp4",
   "model_path": "../models/yolov8n.pt",
   "confidence": 0.35,
-  "output_dir": "output/demo_000327",
+  "output_dir": "../output/demo_000327",
   "output_video_name": "000327_direction_annotated.mp4",
   "display_window": false,
   "save_annotated_video": true,

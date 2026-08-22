@@ -11,7 +11,7 @@ class OverviewPage(ttk.Frame):
         ttk.Label(self, text="系统总览", font=("Segoe UI", 16, "bold")).pack(anchor="w")
         ttk.Label(self, text="以下为当前仓库已实现的数据流。教学台只说明和调试，不替代视觉主程序。", wraplength=900).pack(anchor="w", pady=(4, 14))
         modules = (
-            ("IMX219 摄像头", "输入", "Picamera2 实时 BGR 帧", "rpi_app/vision/camera_runner.py"),
+            ("IMX219 摄像头", "输入", "Picamera2 实时 BGR 帧", "rpi_app/sources/picamera_source.py"),
             ("YOLO 人员检测 + ByteTrack 目标跟踪", "视频 / 摄像头主链", "PersonTracker.track 内部调用 Ultralytics model.track；仅 person (class 0)。", "rpi_app/vision/tracker.py"),
             ("轨迹与运动方向", "连续画面轨迹", "Track ID、底部中心轨迹、heading_angle、画面相对速度。", "rpi_app/vision/trajectory.py"),
             ("人流分析 / 空间汇合", "流组质心相对运动", "convergence_score、风险、ETA、汇合点；Conflict Zone 不是正式评分直接输入。", "rpi_app/decision/flow_analysis.py"),

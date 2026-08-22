@@ -193,6 +193,13 @@ def _draw_live_trend(canvas, status, context, entries: list) -> None:
     else:
         entries.append(((TREND_X + TREND_WIDTH - 174, INFO_Y + 16), "\u5b9e\u9a8c\u5371\u9669\u9608\u503c\uff1a\u5f85\u6807\u5b9a", _MUTED, 13))
 
+    if calibrated:
+        eta = status.get("time_to_danger")
+        eta_text = "预计达到实验危险阈值：--" if not isinstance(eta, (int, float)) else f"预计约 {float(eta):.1f} 秒达到实验阈值"
+        entries.append(((TREND_X + 16, INFO_Y + 36), eta_text, _MUTED, 12))
+    else:
+        entries.append(((TREND_X + 16, INFO_Y + 36), "预计达到实验危险阈值：--", _MUTED, 12))
+        entries.append(((TREND_X + 214, INFO_Y + 36), "需完成真实楼梯实验标定", _MUTED, 12))
     real, forecast = _trend_points(context.get("prediction_history", []), status)
     left, right, top, bottom = _plot_bounds(rect)
     for index in range(4):
@@ -256,12 +263,16 @@ def _draw_flow_card(canvas, status, entries: list) -> None:
     _panel(canvas, FLOW_X, INFO_Y, FLOW_WIDTH, INFO_HEIGHT)
     entries.append(((FLOW_X + 16, INFO_Y + 14), "人流监测", _TEXT, 19))
     crowd_text, crowd_color = _crowd_state(status)
+    running_count = _int(status.get("running_count"))
+    event_text = "检测到跑动" if bool(status.get("running_event")) else "正常通行"
+    event_color = _RED if running_count else crowd_color
     rows = (
         ("当前人数", f"{_int(status.get('total_people'))} 人", _BLUE),
         ("跟踪人数", f"{_int(status.get('tracked_people', status.get('total_people')))} 人", _BLUE),
         ("运动人数", f"{_int(status.get('moving_people'))} 人", _BLUE),
+        ("跑动人数", f"{running_count} 人", _RED if running_count else _GREEN),
         ("拥挤指数", f"{_number(status.get('crowd_index')):.2f}", _TEXT),
-        ("人流状态", crowd_text, crowd_color),
+        ("当前事件", event_text, event_color),
     )
     for index, (label, value, color) in enumerate(rows):
         y = INFO_Y + 48 + index * 28

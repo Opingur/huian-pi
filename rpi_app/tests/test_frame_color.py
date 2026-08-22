@@ -8,6 +8,7 @@ from unittest.mock import patch
 import numpy as np
 
 from vision import camera_runner
+from sources import picamera_source
 from vision.frame_color import (
     INTERNAL_FRAME_COLOR_SPACE,
     PICAMERA2_RGB888_CAPTURE_ARRAY_COLOR_SPACE,
@@ -100,8 +101,8 @@ class FrameColorTests(unittest.TestCase):
         self.assertTrue(_FakePicamera2.instances[0].stopped)
         self.assertTrue(_FakePicamera2.instances[0].closed)
 
-    def test_camera_runner_has_no_rgb_to_bgr_conversion(self):
-        source = Path(camera_runner.__file__).read_text(encoding="utf-8")
+    def test_picamera_source_has_no_extra_rgb_to_bgr_conversion(self):
+        source = Path(picamera_source.__file__).read_text(encoding="utf-8")
         self.assertIn("frame_bgr = picamera_rgb888_capture_array_to_bgr(frame_rgb)", source)
         self.assertNotIn("cv2.COLOR_RGB2BGR", source)
         self.assertNotIn("cvtColor(frame_rgb", source)

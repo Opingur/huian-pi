@@ -9,8 +9,8 @@ from typing import Any, Callable
 
 import cv2
 
+from sources.picamera_source import PicameraSource
 from ui.startup_screen import STARTUP_INITIALIZING, StartupScreen, startup_failure_message
-from vision.frame_color import picamera_rgb888_capture_array_to_bgr
 from vision.video_runner import TrackedFrameProcessor
 
 
@@ -47,53 +47,28 @@ def run_picamera2_camera(
     output_dir: Path,
     build_status: Callable[..., dict[str, object]],
 ) -> None:
-    """Show Splash first, then initialise the existing camera and live-processing chain."""
-    camera_config = config.get("camera", {})
-    width = int(camera_config.get("width", 1280))
-    height = int(camera_config.get("height", 720))
-    pixel_format = str(camera_config.get("format", "RGB888"))
-    if pixel_format != "RGB888":
-        raise ValueError("camera.format currently supports RGB888 only")
-
+    """Show Splash first, then feed the formal live-processing chain from PicameraSource."""
     output_dir.mkdir(parents=True, exist_ok=True)
     status_path = output_dir / "camera_status.jsonl"
     window_name = _configure_live_window(config)
     startup = StartupScreen(window_name, config.get("display", {}))
     startup.show(STARTUP_INITIALIZING)
-    camera = None
-    started = False
+    source = PicameraSource(config.get("camera", {}))
     processor = None
-    start_time = None
     try:
-        try:
-            from picamera2 import Picamera2
-        except ImportError as error:
-            raise RuntimeError(
-                "source_type=camera requires Picamera2 on Raspberry Pi; image/video modes do not need it."
-            ) from error
-
         startup.show("正在连接摄像头…")
-        camera = Picamera2()
-        camera.configure(camera.create_video_configuration(main={"size": (width, height), "format": pixel_format}))
-        camera.start()
-        started = True
+        source.start()
         startup.show("正在启动视觉系统…")
         processor = TrackedFrameProcessor(config, build_status)
         startup.show("实时监测启动…")
-        start_time = time.monotonic()
         live = config.get("live_processing", {})
         perf_interval = float(live.get("performance_log_interval_seconds", 2.0))
         performance_enabled = bool(live.get("performance_log_enabled", True))
-        last_perf_time = start_time
+        last_perf_time = time.monotonic()
         perf_frames = 0
         with status_path.open("w", encoding="utf-8") as status_file:
             while True:
-                frame_rgb = camera.capture_array()
-                if frame_rgb is None or frame_rgb.ndim != 3 or frame_rgb.shape[2] != 3:
-                    raise RuntimeError("Picamera2 RGB888 capture did not return a three-channel frame")
-                # Picamera2 RGB888 capture_array is already [B, G, R] for OpenCV; do not swap again.
-                frame_bgr = picamera_rgb888_capture_array_to_bgr(frame_rgb)
-                source_timestamp = time.monotonic() - float(start_time)
+                frame_bgr, source_timestamp = source.read()
                 annotated, status, snapshot_saved = processor.process_live_frame(frame_bgr, source_timestamp)
                 if snapshot_saved:
                     processor.publisher.send_status(status, source_timestamp=source_timestamp)
@@ -120,9 +95,4 @@ def run_picamera2_camera(
             processor.close()
         if window_name is not None:
             cv2.destroyAllWindows()
-        if camera is not None:
-            try:
-                if started:
-                    camera.stop()
-            finally:
-                camera.close()
+        source.close()

@@ -1,28 +1,17 @@
-# Dynamic crowd index
+# Crowd Index
 
-Fixed people thresholds are retained as a safety floor, but they cannot show whether a corridor is filling quickly or both fixed passages are occupied together. The dynamic index adds those signals.
+动态 Crowd Index 用于描述楼道固定区域的占用、增长和空间汇合风险：
 
-## Formula
+```text
+I = wd × density_score + wg × growth_score + wc × conflict_score
+```
 
-`I = wd * C + wg * G + wr * R`, clamped to `[0, 1]`.
+三个分量均限制在 `[0, 1]`：
 
-- `C` is `(left_people + right_people) / (left_capacity + right_capacity)`, capped at 1.
-- `G` is positive `occupancy_growth / growth_rate_max`, capped at 1. `occupancy_growth` comes from the existing 30-second snapshot window; it is an occupancy-change rate, not a person-passing speed.
-- `R` is 1 when the existing fixed-passage conflict rule is true, otherwise 0. It does not infer real walking direction from one frame.
+- `density_score`：左右区域人数相对总容量。
+- `growth_score`：正向 `occupancy_growth` 相对最大增长率；它是区域占用变化，不是跑动速度。
+- `conflict_score`：正式空间汇合分数；未提供时才可按配置使用旧 fixed-region conflict。
 
-Default weights are density 0.5, growth 0.3 and conflict 0.2. They are configurable in `pc_prototype/config.json`.
+正式默认权重来自 `rpi_app/config.json` 与各运行配置：density `0.5`、growth `0.3`、conflict `0.2`。实现位于 `rpi_app/decision/crowd_index.py`。
 
-## Risk mapping
-
-| Index | Risk |
-| --- | --- |
-| `< 0.30` | NORMAL |
-| `0.30–0.59` | WARNING |
-| `0.60–0.79` | CROWD |
-| `>= 0.80` | DANGER |
-
-The legacy people-count safety floor can only raise a result: 8 people produces at least WARNING and 16 produces DANGER. FIRE remains reserved for future sensor thresholds.
-
-## K230 migration
-
-`crowd_index.py` uses only functions, numbers and dictionaries. Copy the module and the matching risk mapping to K230 after the CanMV board and firmware are confirmed; no K230 code is changed in this PC validation round.
+风险映射实现位于 `rpi_app/decision/risk_engine.py`：`<0.30` 为 `NORMAL`，`0.30–0.59` 为 `WARNING`，`≥0.60` 为 `CROWD`。人数安全兜底也只会提升到 `CROWD`；`DANGER` 不表示普通拥挤。

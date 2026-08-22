@@ -219,6 +219,29 @@ class TrendCrowdTeachingServiceTests(unittest.TestCase):
         self.assertTrue(changed.reset)
         self.assertEqual((self.tracker_builds, self.flow_builds), (3, 3))
 
+    def test_observed_history_survives_jumps_but_formal_history_resets(self) -> None:
+        packet = None
+        for second in range(6):
+            packet = self.service.read_trend_frame(second, sequential=second > 0)
+        self.assertEqual(set(dict(packet.observed_history)), set(range(6)))
+        jumped = self.service.read_trend_frame(10, sequential=False)
+        self.assertEqual(len(jumped.history), 1)
+        self.assertFalse(jumped.forecast["prediction_valid"])
+        self.assertEqual(set(dict(jumped.observed_history)), set(range(6)) | {10})
+        for second in (11, 12):
+            jumped = self.service.read_trend_frame(second, sequential=True)
+        self.assertEqual(set(dict(jumped.observed_history)), set(range(6)) | {10, 11, 12})
+        back = self.service.read_trend_frame(5, sequential=False)
+        self.assertEqual(len(back.history), 1)
+        self.assertEqual(set(dict(back.observed_history)), set(range(6)) | {10, 11, 12})
+        for second in (6, 7, 8):
+            back = self.service.read_trend_frame(second, sequential=True)
+        self.assertEqual(set(dict(back.observed_history)), set(range(9)) | {10, 11, 12})
+        complete = self.service.read_trend_frame(9, sequential=True)
+        self.assertEqual(set(dict(complete.observed_history)), set(range(13)))
+        self.service.reload_models()
+        self.assertEqual(self.service.observed_history, {})
+
     def test_worker_close_calls_service_close(self) -> None:
         class CloseOnlyService:
             closed = False

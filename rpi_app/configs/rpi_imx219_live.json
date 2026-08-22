@@ -8,7 +8,7 @@
   },
   "model_path": "../models/yolov8n.pt",
   "confidence": 0.35,
-  "output_dir": "output/rpi_imx219_live",
+  "output_dir": "../output/rpi_imx219_live",
   "display_window": true,
   "save_annotated_video": false,
   "flow_window_seconds": 30,

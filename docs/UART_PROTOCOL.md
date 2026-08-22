@@ -1,44 +1,21 @@
-# Raspberry Pi 5 to ESP32 UART protocol
+# Pi ↔ ESP32 UART 协议
 
-Huian Loudao uses a one-way Raspberry Pi 5 -> ESP32 protocol: **115200 baud, 8N1, 3.3 V TTL**, newline-delimited compact UTF-8 JSON, and `protocol_version: 1`.
+传输为 115200、8N1、3.3 V TTL、UTF-8 紧凑 JSON，一行一个对象，`protocol_version` 为 `1`。Pi 硬件端使用 `/dev/ttyAMA0`；Windows video demo 只有显式指定 `--serial-port COMx` 才会打开 USB 串口。
 
-## Raspberry Pi 5 UART0
-
-The project UART0 is enabled with this Raspberry Pi 5-only boot configuration:
-
-```text
-dtoverlay=uart0-pi5
-```
-
-This places UART0 on the 40-pin header:
-
-- GPIO14 / physical Pin 8: `TXD0`
-- GPIO15 / physical Pin 10: `RXD0`
-- GND: common ground
-- Linux device: `/dev/ttyAMA0`
-
-On the verified Raspberry Pi 5, `/dev/serial0 -> ttyAMA10` is the Pi 5 Debug UART. Huian Loudao must **not** use `/dev/serial0` for ESP32 communication.
-
-## Formal wiring
-
-- Raspberry Pi 5 GPIO14 / TXD0 -> ESP32 GPIO16 / RX2
-- Raspberry Pi 5 GPIO15 / RXD0 <- ESP32 GPIO17 / TX2
-- Raspberry Pi 5 GND <-> ESP32 GND
-
-Both ends are 3.3 V TTL UART. Do not connect 5 V to UART TX/RX.
-
-## Protocol payload
-
-Each message contains only these fields:
+## Pi → ESP32 视觉载荷
 
 ```json
-{"protocol_version":1,"timestamp":1720000000,"vision_risk":"CROWD","crowd_index":0.72,"total_people":12,"direction_conflict":true,"vision_fire_suspected":false,"vision_smoke_suspected":true,"vision_fire_confidence":0.0,"vision_smoke_confidence":0.81}
+{"protocol_version":1,"timestamp":1720000000,"vision_risk":"CROWD","crowd_index":0.72,"total_people":12,"direction_conflict":true,"vision_fire_suspected":false,"vision_smoke_suspected":false,"vision_fire_confidence":0.0,"vision_smoke_confidence":0.0,"running_event":true,"running_count":1}
 ```
 
-`vision_risk` describes person-flow/crowd risk only. It is never visual fire evidence. `vision_fire_suspected` and `vision_smoke_suspected` originate only from the Fire/Smoke YOLO temporal evidence. Bounding boxes, trajectories, flow groups, convergence points, prediction values, and dashboard details are deliberately excluded.
+`running_event` / `running_count` 仅是低优先级跑动轻提示，不改写 `vision_risk`。Pi 发送字段由 `rpi_app/communication/esp32.py:UART_FIELDS` 唯一维护；任何 Dashboard、轨迹或框数据都不进入协议。
 
-The ESP32 clears stale vision state after five seconds without a complete valid message. That produces `COMM_TIMEOUT` (blue RGB and silent buzzer). Local MQ-2 plus DHT evidence can still produce `FIRE_EMERGENCY` during a UART timeout.
+## ESP32 → Pi 状态镜像
 
-## Application configuration
+ESP32 同时向 Pi UART2 和 USB Serial 输出：
 
-Use the `esp32` block in `rpi_app/configs/rpi_imx219_live.json` for Pi 5 camera deployment. Its default port is `/dev/ttyAMA0`; keep `enabled: false` and `dry_run: true` for normal desktop work. For hardware use, set `enabled: true`, `dry_run: false`, and keep the port as `/dev/ttyAMA0`. The publisher opens once, sends at `send_interval_seconds`, and closes when the runner exits. It imports `pyserial` only for enabled, non-dry UART use.
+```json
+{"protocol_version":1,"message_type":"esp32_status","uptime_ms":1234,"mq2_value":0,"mq2_warning":false,"temperature_c":28.0,"temperature_valid":true,"temperature_warning":false,"system_state":"CROWD","vision_valid":true}
+```
+
+Pi 接受 `NORMAL`、`WARNING`、`CROWD`、历史兼容 `CROWD_WARNING/CROWD_DANGER`、`DANGER`、`FIRE` 与 `COMM_TIMEOUT`。正式固件的状态语义、GPIO 与本地 MQ-2/DHT11 融合保持在 `esp32_firmware/huian_esp32/huian_esp32.ino`。

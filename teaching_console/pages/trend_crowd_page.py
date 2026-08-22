@@ -6,7 +6,15 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from teaching_console.services.trend_crowd_teaching_service import TrendCrowdPacket, TrendCrowdTeachingService
+from teaching_console.ui_zoom import CONTROL_MASK, scaled_value
+from teaching_console.services.trend_crowd_teaching_service import (
+    TrendCrowdPacket,
+    TrendCrowdTeachingService,
+    calculate_nice_y_axis,
+    calculate_x_ticks,
+    normalize_observed_second,
+    split_continuous_segments,
+)
 from teaching_console.services.vision_teaching_service import (
     VisionTeachingError,
     VisionTeachingWorker,
@@ -19,6 +27,9 @@ from teaching_console.services.vision_teaching_service import (
 LEVEL_HISTORY = "history"
 LEVEL_TREND = "trend"
 LEVEL_CROWD = "crowd"
+
+BASE_VIDEO_SIZE = (640, 420)
+BASE_GRAPH_HEIGHT = 230
 
 
 def optional_number(value: object, digits: int = 1, signed: bool = False) -> str:
@@ -50,6 +61,7 @@ class TrendCrowdPage(ttk.Frame):
         self.current_var = tk.StringVar(value="当前人数：—")
         self.trend_var = tk.StringVar(value="趋势预测：尚未累积历史")
         self.index_var = tk.StringVar(value="Crowd Index：—")
+        self.chart_note_var = tk.StringVar()
         self.teaching_var = tk.StringVar()
         self.seek_var = tk.DoubleVar(value=0)
         self.playing = False
@@ -57,6 +69,8 @@ class TrendCrowdPage(ttk.Frame):
         self.closing = False
         self.request_token = 0
         self._image = None
+        self._display_frame_bgr = None
+        self._zoom_factor = 1.0
         self._packet: TrendCrowdPacket | None = None
         self._wheel_tag = f"TrendCrowdWheel_{id(self)}"
         self._wheel_targets: list[tk.Misc] = []
@@ -99,6 +113,8 @@ class TrendCrowdPage(ttk.Frame):
                 widget.bindtags(tuple(tag for tag in widget.bindtags() if tag != self._wheel_tag))
 
     def _on_mousewheel(self, event):
+        if event.state & CONTROL_MASK:
+            return None
         if self.winfo_ismapped() and event.delta:
             steps = -int(event.delta / 120)
             self.canvas.yview_scroll(steps or (-1 if event.delta > 0 else 1), "units")
@@ -129,9 +145,10 @@ class TrendCrowdPage(ttk.Frame):
         ttk.Label(levels, text="跳转或回退后，趋势历史需要重新积累。", foreground="#665500").pack(side="left")
 
         graph_box = ttk.LabelFrame(self.body, text="人数历史与预测图", padding=6); graph_box.pack(fill="x", pady=(8, 0))
-        self.graph = tk.Canvas(graph_box, height=230, background="white", highlightthickness=1, highlightbackground="#bbbbbb")
+        self.graph = tk.Canvas(graph_box, height=BASE_GRAPH_HEIGHT, background="white", highlightthickness=1, highlightbackground="#bbbbbb")
         self.graph.pack(fill="x", expand=True)
         self.graph.bind("<Configure>", lambda _event: self._draw_graph())
+        ttk.Label(graph_box, textvariable=self.chart_note_var, foreground="#555555", wraplength=1050).pack(anchor="w", pady=(4, 0))
         self.index_box = ttk.LabelFrame(self.body, text="Crowd Index 分解", padding=8)
         ttk.Label(self.index_box, textvariable=self.index_var, justify="left", wraplength=1050).pack(anchor="w")
 
@@ -173,7 +190,7 @@ class TrendCrowdPage(ttk.Frame):
             self.current_case = None; self.load_video(Path(path))
 
     def load_video(self, path: Path) -> None:
-        self.stop_play(); self._submit("open_video", path); self.status_var.set("正在后台打开视频…")
+        self.stop_play(); self._packet = None; self._draw_graph(); self._submit("open_video", path); self.status_var.set("正在后台打开视频…")
 
     def reload_models(self) -> None:
         self.stop_play(); self._submit("reload_models"); self.status_var.set("已释放模型、追踪和趋势状态；下次分析将重新积累历史")
@@ -239,6 +256,7 @@ class TrendCrowdPage(ttk.Frame):
         elif operation == "read_trend_frame":
             self._render_packet(value)
         elif operation == "reload_models":
+            self._packet = None; self._draw_graph()
             self.model_var.set(f"模型：{self.config.model_path.name}（已释放，按需重新加载）")
 
     def _render_packet(self, packet: TrendCrowdPacket) -> None:
@@ -252,7 +270,7 @@ class TrendCrowdPage(ttk.Frame):
         self._update_panels(); self._draw_graph()
         self.model_var.set(f"模型：{self.config.model_path.name} | person-only | conf={self.config.confidence:.2f}")
         reset_note = "；跳转后已重建追踪与趋势历史" if packet.reset else ""
-        self.status_var.set(f"已处理 {len(frame.rows)} 人，历史快照 {len(packet.history)} 个{reset_note}")
+        self.status_var.set(f"已处理 {len(frame.rows)} 人，正式历史 {len(packet.history)} 个快照，图表观察 {len(packet.observed_history)} 秒{reset_note}")
         if self.playing:
             if frame.frame_index + 1 >= frame.video.total_frames:
                 self.stop_play()
@@ -298,52 +316,99 @@ class TrendCrowdPage(ttk.Frame):
 
     def _draw_graph(self) -> None:
         canvas = self.graph; canvas.delete("all")
-        width, height = max(canvas.winfo_width(), 420), max(canvas.winfo_height(), 230)
-        left, top, right, bottom = 48, 18, width - 18, height - 34
+        graph_height = scaled_value(BASE_GRAPH_HEIGHT, self._zoom_factor)
+        width, height = max(canvas.winfo_width(), 420), max(canvas.winfo_height(), graph_height)
+        left = scaled_value(52, self._zoom_factor)
+        top = scaled_value(18, self._zoom_factor)
+        right = width - scaled_value(18, self._zoom_factor)
+        bottom = height - scaled_value(38, self._zoom_factor)
         canvas.create_line(left, top, left, bottom, fill="#666666")
         canvas.create_line(left, bottom, right, bottom, fill="#666666")
         canvas.create_text(8, top, text="人数", anchor="nw", fill="#444444")
-        canvas.create_text(right, bottom + 18, text="时间", anchor="e", fill="#444444")
-        if self._packet is None or not self._packet.history:
-            canvas.create_text(width // 2, height // 2, text="连续播放后将显示正式 PeopleFlow 历史", fill="#666666")
+        canvas.create_text(right, bottom + 30, text="时间（秒）", anchor="e", fill="#444444")
+        if self._packet is None or not self._packet.observed_history:
+            canvas.create_text(width // 2, height // 2, text="处理视频帧后，将按绝对秒记录真实观察人数", fill="#666666")
             return
-        history = self._packet.history; times = [item[0] for item in history]; totals = [item[1] + item[2] for item in history]
-        prediction_values = self._packet.forecast.get("predicted_people", {}) if self._packet.forecast.get("prediction_valid") and self.level_var.get() != LEVEL_HISTORY else {}
-        horizon_end = times[-1] + max((int(horizon) for horizon, value in prediction_values.items() if value is not None), default=0)
-        predicted_maximum = max((float(value) for value in prediction_values.values() if value is not None), default=0.0)
-        start, end = times[0], max(times[-1], horizon_end, times[0] + 1.0); maximum = max(1, max(totals), predicted_maximum)
-        def point(timestamp, people):
-            x = left + (float(timestamp) - start) / (end - start) * (right - left)
-            y = bottom - float(people) / maximum * (bottom - top)
+
+        observed = dict(self._packet.observed_history)
+        prediction_values = (
+            self._packet.forecast.get("predicted_people", {})
+            if self._packet.forecast.get("prediction_valid") and self.level_var.get() != LEVEL_HISTORY
+            else {}
+        )
+        prediction_start = self._packet.history[-1][0] if self._packet.history else self._packet.frame.seconds
+        max_prediction_time = max(
+            (prediction_start + int(horizon) for horizon, value in prediction_values.items() if value is not None),
+            default=0.0,
+        )
+        max_second = max(max(observed), int(max_prediction_time + 0.999))
+        x_max = max(1.0, float(max_second))
+        displayed_people = list(observed.values()) + [float(value) for value in prediction_values.values() if value is not None]
+        y_max, _step, y_ticks = calculate_nice_y_axis(max(displayed_people, default=0))
+
+        def point(seconds: float, people: float) -> tuple[float, float]:
+            x = left + float(seconds) / x_max * (right - left)
+            y = bottom - float(people) / y_max * (bottom - top)
             return x, y
-        points = [point(timestamp, people) for timestamp, people in zip(times, totals)]
-        if len(points) > 1:
-            canvas.create_line(*[value for item in points for value in item], fill="#2867a8", width=2)
-        for x, y in points:
-            canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill="#2867a8", outline="")
-        canvas.create_text(left, bottom + 18, text=f"{times[0]:.0f}s", anchor="w", fill="#555555")
-        canvas.create_text(right, bottom + 18, text=f"{times[-1]:.0f}s", anchor="e", fill="#555555")
-        if self.level_var.get() != LEVEL_HISTORY and self._packet.forecast.get("prediction_valid"):
-            predicted = self._packet.forecast["predicted_people"]
-            current = totals[-1]; previous = point(times[-1], current)
+
+        x_ticks = calculate_x_ticks(max_second)
+        label_every = max(1, (len(x_ticks) * 18 + (right - left) - 1) // max(right - left, 1))
+        for second in x_ticks:
+            x, _ = point(second, 0)
+            canvas.create_line(x, bottom, x, bottom + 4, fill="#666666")
+            if second % label_every == 0:
+                canvas.create_text(x, bottom + 15, text=str(second), anchor="n", fill="#555555", font=("Segoe UI", scaled_value(7, self._zoom_factor, minimum=7)))
+        for value in y_ticks:
+            _, y = point(0, value)
+            canvas.create_line(left - 4, y, left, y, fill="#666666")
+            canvas.create_text(left - 7, y, text=str(value), anchor="e", fill="#555555", font=("Segoe UI", scaled_value(8, self._zoom_factor, minimum=7)))
+
+        for segment in split_continuous_segments(observed):
+            points = [point(second, people) for second, people in segment]
+            if len(points) > 1:
+                canvas.create_line(*[coordinate for item in points for coordinate in item], fill="#2867a8", width=2)
+            for x, y in points:
+                canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill="#2867a8", outline="")
+
+        current_second = normalize_observed_second(self._packet.frame.seconds)
+        if current_second in observed:
+            x, y = point(current_second, observed[current_second])
+            canvas.create_oval(x - 5, y - 5, x + 5, y + 5, outline="#17446f", width=2)
+
+        if prediction_values:
+            previous = point(prediction_start, self._packet.trend.total_people)
             for horizon in (10, 20, 30):
-                value = predicted.get(horizon)
+                value = prediction_values.get(horizon)
                 if value is None:
                     continue
-                future = point(times[-1] + horizon, value)
+                future = point(prediction_start + horizon, value)
                 canvas.create_line(*previous, *future, fill="#b56d20", dash=(4, 3), width=2)
                 canvas.create_text(future[0], max(top + 8, future[1] - 10), text=f"+{horizon}", fill="#b56d20")
                 previous = future
 
     def _render_image(self, frame_bgr) -> None:
+        self._display_frame_bgr = frame_bgr
         try:
             from PIL import Image, ImageTk
-            image = Image.fromarray(frame_bgr[:, :, ::-1]); image.thumbnail((640, 420))
+            image = Image.fromarray(frame_bgr[:, :, ::-1])
+            image.thumbnail(tuple(scaled_value(value, self._zoom_factor) for value in BASE_VIDEO_SIZE))
             self._image = ImageTk.PhotoImage(image); self.image_label.configure(image=self._image, text="")
         except Exception as error:
             self.image_label.configure(image="", text=f"无法显示画面：{error}")
 
+    def on_zoom_changed(self, factor: float) -> None:
+        self._zoom_factor = factor
+        self.graph.configure(height=scaled_value(BASE_GRAPH_HEIGHT, factor))
+        if self._display_frame_bgr is not None:
+            self._render_image(self._display_frame_bgr)
+        self._draw_graph()
+        self.after_idle(lambda: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+
     def _set_teaching_text(self) -> None:
+        self.chart_note_var.set(
+            "折线只连接已经连续观察过的时间；跳过的时间留空，之后重新观察时会自动补齐。"
+            + (" 视频跳转后，正式趋势模型会重新积累连续历史。" if self.level_var.get() != LEVEL_HISTORY else "")
+        )
         level = self.level_var.get()
         if level == LEVEL_HISTORY:
             self.teaching_var.set("先看当前人数与最近约 30 秒人数历史。只看当前人数，不能说明接下来会增加还是减少。")

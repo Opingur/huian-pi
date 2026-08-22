@@ -6,6 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from teaching_console.ui_zoom import CONTROL_MASK, scaled_value
 from teaching_console.services.vision_teaching_service import (
     MODE_DETECT,
     MODE_RAW,
@@ -25,6 +26,8 @@ MODE_LABELS = {
     MODE_DETECT: "YOLO 检测",
     MODE_TRACK: "YOLO + ByteTrack",
 }
+
+BASE_VIDEO_SIZE = (640, 420)
 
 
 class VisionTrackingPage(ttk.Frame):
@@ -54,6 +57,8 @@ class VisionTrackingPage(ttk.Frame):
         self.closing = False
         self.request_token = 0
         self._image = None
+        self._display_frame_bgr = None
+        self._zoom_factor = 1.0
         self._wheel_tag = f"VisionTrackingWheel_{id(self)}"
         self._wheel_targets = []
         self._build_scroll_container()
@@ -103,6 +108,8 @@ class VisionTrackingPage(ttk.Frame):
                 widget.bindtags(tuple(tag for tag in widget.bindtags() if tag != self._wheel_tag))
 
     def _on_mousewheel(self, event):
+        if event.state & CONTROL_MASK:
+            return None
         if self.winfo_ismapped() and event.delta:
             steps = -int(event.delta / 120)
             self._scroll_canvas.yview_scroll(steps or (-1 if event.delta > 0 else 1), "units")
@@ -304,14 +311,21 @@ class VisionTrackingPage(ttk.Frame):
                 self.after(120, lambda: self._request_frame(packet.frame_index + 1, sequential=packet.mode == MODE_TRACK))
 
     def _render_image(self, frame_bgr) -> None:
+        self._display_frame_bgr = frame_bgr
         try:
             from PIL import Image, ImageTk
             image = Image.fromarray(frame_bgr[:, :, ::-1])
-            image.thumbnail((640, 420))
+            image.thumbnail(tuple(scaled_value(value, self._zoom_factor) for value in BASE_VIDEO_SIZE))
             self._image = ImageTk.PhotoImage(image)
             self.canvas_label.configure(image=self._image, text="")
         except Exception as error:
             self.canvas_label.configure(image="", text=f"无法显示画面：{error}")
+
+    def on_zoom_changed(self, factor: float) -> None:
+        self._zoom_factor = factor
+        if self._display_frame_bgr is not None:
+            self._render_image(self._display_frame_bgr)
+        self.after_idle(self._sync_scrollregion)
 
     def _render_rows(self, packet: FramePacket) -> None:
         for item in self.table.get_children():

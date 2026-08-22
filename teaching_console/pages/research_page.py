@@ -12,6 +12,8 @@ from teaching_console.services.research_prediction_service import ResearchPredic
 from teaching_console.services.research_store import ResearchStore
 from teaching_console.services.research_vision_service import ResearchVisionService
 from teaching_console.services.vision_teaching_service import VisionTeachingWorker
+from teaching_console.runtime_paths import ensure_writable_data_root
+from teaching_console.ui_zoom import CONTROL_MASK, scaled_value
 
 
 TYPE_LABELS = {"teaching": "教学练习", "formal": "正式研究"}
@@ -50,16 +52,21 @@ def prediction_target(anchor_time_seconds: float, horizon_seconds: int, fps: flo
     return target_time, int(round(target_time * fps))
 
 
+BASE_VIDEO_SIZE = (640, 420)
+
+
 class ResearchPage(ttk.Frame):
     def __init__(self, master, root_path: Path) -> None:
         super().__init__(master)
-        self.root_path = root_path; self.store = ResearchStore(root_path); self.counts = ResearchCountService(self.store); self.predictions = ResearchPredictionService(self.store)
-        self.worker = VisionTeachingWorker(ResearchVisionService(root_path)); self.experiment = None; self.video = None; self.tasks=[]; self.index=0; self.token=0; self.busy=False; self.closing=False; self._prediction_target=None; self._prediction_photo=None; self._detect_id=None; self._next_after_detect=None; self.mode=tk.StringVar(value="count"); self.pred_index=0; self.pred_rows=[]; self.analysis_events=queue.Queue(); self.cancel_analysis=None
+        self.root_path = root_path; self.data_root = ensure_writable_data_root(root_path); self.store = ResearchStore(self.data_root); self.counts = ResearchCountService(self.store); self.predictions = ResearchPredictionService(self.store)
+        self.worker = VisionTeachingWorker(ResearchVisionService(root_path)); self._zoom_factor=1.0; self._count_frame_bgr=None; self._prediction_frame_bgr=None; self.experiment = None; self.video = None; self.tasks=[]; self.index=0; self.token=0; self.busy=False; self.closing=False; self._prediction_target=None; self._prediction_photo=None; self._detect_id=None; self._next_after_detect=None; self.mode=tk.StringVar(value="count"); self.pred_index=0; self.pred_rows=[]; self.analysis_events=queue.Queue(); self.cancel_analysis=None
         self.gt=tk.StringVar(); self.note=tk.StringVar(); self.status=tk.StringVar(value="请新建或打开实验"); self.meta=tk.StringVar(); self.point=tk.StringVar(); self.result=tk.StringVar(); self.metrics=tk.StringVar(); self.jump=tk.StringVar()
         self._scroll(); self._build(); self.after(40,self._drain)
     def _scroll(self):
         self.canvas=tk.Canvas(self,highlightthickness=0); self.bar=ttk.Scrollbar(self,orient='vertical',command=self.canvas.yview); self.canvas.configure(yscrollcommand=self.bar.set); self.canvas.pack(side='left',fill='both',expand=True); self.bar.pack(side='right',fill='y'); self.body=ttk.Frame(self.canvas,padding=12); self.window=self.canvas.create_window((0,0),window=self.body,anchor='nw'); self.body.bind('<Configure>',lambda e:self.canvas.configure(scrollregion=self.canvas.bbox('all'))); self.canvas.bind('<Configure>',lambda e:self.canvas.itemconfigure(self.window,width=e.width)); self.bind('<Enter>',lambda e:self.canvas.bind_all('<MouseWheel>',self._wheel,add='+')); self.bind('<Leave>',lambda e:self.canvas.unbind_all('<MouseWheel>'))
-    def _wheel(self,e): self.canvas.yview_scroll(-int(e.delta/120 or (1 if e.delta<0 else -1)),'units'); return 'break'
+    def _wheel(self,e):
+        if e.state & CONTROL_MASK:return None
+        self.canvas.yview_scroll(-int(e.delta/120 or (1 if e.delta<0 else -1)),'units'); return 'break'
     def _build(self):
         ttk.Label(self.body,text='研究记录 / Ground Truth',font=('Segoe UI',16,'bold')).pack(anchor='w'); modes=ttk.Frame(self.body);modes.pack(anchor='w',pady=(4,0));ttk.Radiobutton(modes,text='人数 Ground Truth',variable=self.mode,value='count',command=self.set_mode).pack(side='left');ttk.Radiobutton(modes,text='预测 Ground Truth',variable=self.mode,value='prediction',command=self.set_mode).pack(side='left',padx=12);ttk.Label(self.body,text='人工 Ground Truth：由观察者独立查看原始画面后记录真实人数。',wraplength=1050).pack(anchor='w');self.count_area=ttk.Frame(self.body);self.count_area.pack(fill='both',expand=True)
         top=ttk.Frame(self.count_area);top.pack(fill='x',pady=8);ttk.Button(top,text='新建实验',command=self.new).pack(side='left');ttk.Button(top,text='打开已有实验',command=self.open).pack(side='left',padx=5);ttk.Button(top,text='导出研究数据',command=self.export).pack(side='left');ttk.Label(top,textvariable=self.status).pack(side='right')
@@ -195,17 +202,30 @@ class ResearchPage(ttk.Frame):
     def show(self,i):
         if not self.tasks or self.busy:return
         self.index=max(0,min(i,len(self.tasks)-1));a=self.tasks[self.index];self.gt.set('' if a['ground_truth_count'] is None else str(a['ground_truth_count']));self.note.set(a['note']);self.point.set(f"第 {self.index+1} / {len(self.tasks)} 个  |  时间：{a['video_time_seconds']:.2f} s  | 帧：{a['frame_index']}");self.result.set('正式研究：请先独立填写人工人数。' if self.experiment['experiment_type']=='formal' and a['ground_truth_count'] is None else (f"系统人数：{a['system_count']}；人工人数：{a['ground_truth_count']}；绝对误差：{a['absolute_error']}" if a['system_count'] is not None else ''));self._send('read_raw',a['frame_index']);self.refresh()
-    def render(self,p):
+    def _show_frame(self, target, frame_bgr, prediction=False):
         try:
             from PIL import Image,ImageTk
-            im=Image.fromarray(p.frame_bgr[:,:,::-1]);im.thumbnail((640,420))
-            if self.mode.get() == 'prediction' and self._prediction_target is not None:
-                self._prediction_photo=ImageTk.PhotoImage(im);self.pred_image.configure(image=self._prediction_photo,text='')
-            else:
-                self.photo=ImageTk.PhotoImage(im);self.image.configure(image=self.photo,text='')
-        except Exception as e:
-            target=self.pred_image if self.mode.get() == 'prediction' and self._prediction_target is not None else self.image
-            target.configure(text=str(e),image='')
+            image=Image.fromarray(frame_bgr[:,:,::-1])
+            image.thumbnail(tuple(scaled_value(value,self._zoom_factor) for value in BASE_VIDEO_SIZE))
+            photo=ImageTk.PhotoImage(image)
+            if prediction:self._prediction_photo=photo
+            else:self.photo=photo
+            target.configure(image=photo,text='')
+        except Exception as error:
+            target.configure(text=str(error),image='')
+
+    def on_zoom_changed(self, factor):
+        self._zoom_factor=factor
+        if self.mode.get() == 'prediction' and self._prediction_frame_bgr is not None:
+            self._show_frame(self.pred_image,self._prediction_frame_bgr,prediction=True)
+        elif self._count_frame_bgr is not None:
+            self._show_frame(self.image,self._count_frame_bgr)
+        self.after_idle(lambda:self.canvas.configure(scrollregion=self.canvas.bbox('all')))
+
+    def render(self,p):
+        prediction=self.mode.get() == 'prediction' and self._prediction_target is not None
+        if prediction:self._prediction_frame_bgr=p.frame_bgr;self._show_frame(self.pred_image,p.frame_bgr,prediction=True)
+        else:self._count_frame_bgr=p.frame_bgr;self._show_frame(self.image,p.frame_bgr)
         if p.mode=='detect':
             target=self._detect_id or self.tasks[self.index]['id'];self.store.update_system_count(target,len(p.rows));self.tasks=self.store.annotations(self.experiment['id']);a=self.tasks[self.index];self.result.set(f"系统人数：{len(p.rows)}；人工人数：{a['ground_truth_count'] if a['ground_truth_count'] is not None else '—'}；绝对误差：{a['absolute_error'] if a['absolute_error'] is not None else '—'}");self.refresh()
             if self._next_after_detect is not None:
@@ -237,7 +257,7 @@ class ResearchPage(ttk.Frame):
         self.tasks=self.store.annotations(self.experiment['id']);self.refresh()
     def export(self):
         if not self.experiment:return
-        out=self.counts.export_experiment(self.experiment['id'],self.root_path/'validation'/'exports');messagebox.showinfo('导出完成',f"导出完成：\n{out.relative_to(self.root_path)}",parent=self)
+        out=self.counts.export_experiment(self.experiment['id'],self.data_root/'validation'/'exports');messagebox.showinfo('导出完成',f"导出完成：\n{out}",parent=self)
     def close(self):
         self.closing=True
         if self.cancel_analysis:self.cancel_analysis.set()

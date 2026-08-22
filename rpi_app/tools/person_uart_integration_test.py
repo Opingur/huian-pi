@@ -35,6 +35,8 @@ def build_person_test_status(total_people: int) -> dict[str, object]:
         "vision_smoke_suspected": False,
         "vision_fire_confidence": 0.0,
         "vision_smoke_confidence": 0.0,
+        "running_event": False,
+        "running_count": 0,
     }
 
 

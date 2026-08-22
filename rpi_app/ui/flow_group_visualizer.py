@@ -117,14 +117,19 @@ def draw_flow_tracks(image, detections, motions, options, flow_groups, text_entr
     for detection in detections:
         track_id = int(detection.get("track_id", -1))
         group = flow_groups.get(track_id, {})
+        motion = motions.get(track_id, {})
+        is_running = bool(motion.get("running", False))
         is_highlighted = highlighted_id is not None and track_id == int(highlighted_id)
         color, thickness = _visual_style(group, explain, is_highlighted, highlighted_group)
+        if is_running:
+            # Target-level red is a running cue only; it never changes global risk.
+            color, thickness = (60, 60, 235), max(2, thickness)
         x1, y1, x2, y2 = (int(detection[key]) for key in ("x1", "y1", "x2", "y2"))
         if options.get("show_boxes", True):
             cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
         if options.get("show_track_id", True):
-            label = f"{group['label']}-{track_id}" if group else f"编号 {track_id}"
-            text_entries.append(((x1, max(2, y1 - 24)), label, color, 18 if is_highlighted else 15))
+            label = f"{track_id} 跑动" if is_running else (f"{group['label']}-{track_id}" if group else f"编号 {track_id}")
+            text_entries.append(((x1, max(2, y1 - 24)), label, color, 18 if is_highlighted or is_running else 15))
     for track_id, motion in motions.items():
         group = flow_groups.get(int(track_id), {})
         is_highlighted = highlighted_id is not None and int(track_id) == int(highlighted_id)

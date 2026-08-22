@@ -12,8 +12,8 @@
 ```bash
 python validation/scripts/validate.py count \
   --video 000327 --annotations validation/annotations/count_annotations.csv \
-  --status rpi_app/output/demo_000327/status.jsonl \
-  --output validation/results/count_comparison.csv
+  --status output/demo_000327/status.jsonl \
+  --output output/validation/count_comparison.csv
 ```
 
 脚本会输出样本数、MAE、最大绝对误差和完全正确比例。空标注不会生成虚假结果。
@@ -26,8 +26,8 @@ python validation/scripts/validate.py count \
 
 ```bash
 python validation/scripts/validate.py prediction \
-  --video 000318 --status rpi_app/output/demo_000318/status.jsonl \
-  --output validation/results/prediction_comparison.csv
+  --video 000318 --status output/demo_000318/status.jsonl \
+  --output output/validation/prediction_comparison.csv
 ```
 
 脚本只比较实际存在的未来 10/20/30 秒时间点，视频结尾不足的样本会跳过，不补零。

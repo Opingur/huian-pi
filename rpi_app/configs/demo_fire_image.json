@@ -1,10 +1,10 @@
 {
   "device": "Huian_Loudao_01",
   "source_type": "image",
-  "source": "../fire_positive.jpg",
+  "source": "../test_data/images/fire_positive.jpg",
   "model_path": "../models/yolov8n.pt",
   "confidence": 0.35,
-  "output_dir": "output/demo_fire_image",
+  "output_dir": "../output/demo_fire_image",
   "display_window": false,
   "save_annotated_video": false,
   "flow_window_seconds": 30,

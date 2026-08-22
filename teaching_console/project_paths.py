@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,9 @@ _REQUIRED_PATHS = (
 
 def project_root() -> Path:
     """Return the Huian_YOLO directory containing this package."""
+    if getattr(sys, "frozen", False):
+        # The onedir release keeps project resources beside the executable.
+        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[1]
 
 

@@ -1,10 +1,10 @@
 {
   "device": "Huian_Loudao_01",
   "source_type": "video",
-  "source": "../test_data/000318.mp4",
+  "source": "../test_data/iitb_final/000318.mp4",
   "model_path": "../models/yolov8n.pt",
   "confidence": 0.35,
-  "output_dir": "output/demo_000318",
+  "output_dir": "../output/demo_000318",
   "output_video_name": "000318_annotated.mp4",
   "display_window": false,
   "save_annotated_video": true,

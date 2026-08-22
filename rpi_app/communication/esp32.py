@@ -20,6 +20,8 @@ UART_FIELDS = (
     "vision_smoke_suspected",
     "vision_fire_confidence",
     "vision_smoke_confidence",
+    "running_event",
+    "running_count",
 )
 
 ESP32_STATUS_FIELDS = (
@@ -38,6 +40,7 @@ ESP32_STATUS_FIELDS = (
 ESP32_SYSTEM_STATES = frozenset({
     "NORMAL",
     "WARNING",
+    "CROWD",
     "DANGER",
     "CROWD_WARNING",
     "CROWD_DANGER",
@@ -77,6 +80,8 @@ def build_uart_payload(status: Mapping[str, object]) -> dict[str, object]:
         "vision_smoke_suspected": False,
         "vision_fire_confidence": float(status.get("vision_fire_confidence", 0.0)),
         "vision_smoke_confidence": 0.0,
+        "running_event": bool(status.get("running_event", False)),
+        "running_count": int(status.get("running_count", 0)),
     }
 
 

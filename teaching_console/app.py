@@ -9,12 +9,15 @@ from tkinter import messagebox, ttk
 
 from teaching_console.pages.esp32_page import Esp32Page
 from teaching_console.pages.overview_page import OverviewPage
+from teaching_console.pages.model_optimization_page import ModelOptimizationPage
 from teaching_console.pages.source_map_page import SourceMapPage
 from teaching_console.pages.trajectory_direction_page import TrajectoryDirectionPage
 from teaching_console.pages.trend_crowd_page import TrendCrowdPage
 from teaching_console.pages.research_page import ResearchPage
 from teaching_console.pages.vision_tracking_page import VisionTrackingPage
 from teaching_console.project_paths import check_project, project_root
+from teaching_console.services.source_opening import open_source_file, pyinstaller_source_notice
+from teaching_console.ui_zoom import ZoomManager
 
 
 class TeachingConsoleApp(tk.Tk):
@@ -29,7 +32,12 @@ class TeachingConsoleApp(tk.Tk):
         self.project_status = tk.StringVar()
         self.esp32_status = tk.StringVar(value="ESP32：未连接")
         self.serial_status = tk.StringVar(value="串口：—  波特率：115200")
+        self.zoom_status = tk.StringVar()
+        self.zoom_manager = ZoomManager(self, self.zoom_status)
         self._build()
+        self.zoom_manager.add_callback(self._notify_pages_of_zoom)
+        self.zoom_manager.install_event_bindings()
+        self.zoom_manager.set_zoom(100)
 
     def _build(self) -> None:
         status = ttk.Frame(self, padding=(10, 6)); status.pack(side="top", fill="x")
@@ -40,6 +48,8 @@ class TeachingConsoleApp(tk.Tk):
         ttk.Label(status, textvariable=self.esp32_status).pack(side="left")
         ttk.Separator(status, orient="vertical").pack(side="left", fill="y", padx=12)
         ttk.Label(status, textvariable=self.serial_status).pack(side="left")
+        ttk.Separator(status, orient="vertical").pack(side="left", fill="y", padx=12)
+        ttk.Label(status, textvariable=self.zoom_status).pack(side="left")
         shell = ttk.Frame(self); shell.pack(fill="both", expand=True)
         nav = ttk.Frame(shell, padding=10); nav.pack(side="left", fill="y")
         ttk.Label(nav, text="导航", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
@@ -51,6 +61,7 @@ class TeachingConsoleApp(tk.Tk):
             "轨迹 / Direction": TrajectoryDirectionPage(content, self.root_path, self.open_source, self.copy_path),
             "趋势 / Crowd Index": TrendCrowdPage(content, self.root_path, self.open_source, self.copy_path),
             "研究记录 / Ground Truth": ResearchPage(content, self.root_path),
+            "模型优化 / YOLO Fine-tune": ModelOptimizationPage(content, self.root_path, self.open_source),
             "ESP32实验": Esp32Page(content, self.connection_changed),
         }
         for title in self.pages:
@@ -63,14 +74,24 @@ class TeachingConsoleApp(tk.Tk):
         for page in self.pages.values(): page.pack_forget()
         self.pages[name].pack(fill="both", expand=True)
 
+    def _notify_pages_of_zoom(self, factor: float) -> None:
+        for page in self.pages.values():
+            callback = getattr(page, "on_zoom_changed", None)
+            if callback is not None:
+                callback(factor)
+
     def connection_changed(self, connected: bool, port: str, baud: int) -> None:
         self.esp32_status.set("ESP32：已连接" if connected else "ESP32：未连接")
         self.serial_status.set(f"串口：{port or '—'}  波特率：{baud}")
 
-    def open_source(self, path: Path) -> None:
-        if not path.is_file():
-            messagebox.showwarning("文件不存在", str(path), parent=self); return
-        self._start(path)
+    def open_source(self, path: Path, line: int | None = None) -> None:
+        result = open_source_file(path, line)
+        if not result.opened:
+            messagebox.showwarning("无法打开源码", result.message or str(path), parent=self)
+            return
+        notice = pyinstaller_source_notice()
+        if notice:
+            messagebox.showinfo("源码打开提示", notice, parent=self)
 
     def open_directory(self, path: Path) -> None:
         target = path if path.is_dir() else path.parent
@@ -98,5 +119,7 @@ class TeachingConsoleApp(tk.Tk):
         page = self.pages.get("趋势 / Crowd Index")
         if page is not None: page.close()
         page = self.pages.get("研究记录 / Ground Truth")
+        if page is not None: page.close()
+        page = self.pages.get("模型优化 / YOLO Fine-tune")
         if page is not None: page.close()
         self.destroy()

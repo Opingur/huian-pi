@@ -113,6 +113,7 @@ enum class BuzzerMode : uint8_t {
   SILENT,
   WARNING,
   CROWD,
+  RUNNING,
   FIRE
 };
 
@@ -133,6 +134,10 @@ struct VisionData {
   float crowdIndex = 0.0F;
 
   bool conflict = false;
+
+  // Auxiliary event: never changes the formal route/fire state.
+  bool runningEvent = false;
+  int runningCount = 0;
 
   bool fireSuspected = false;
   bool smokeSuspected = false;
@@ -569,6 +574,16 @@ bool parseVisionJson(
       doc["direction_conflict"].as<bool>();
   }
 
+
+  // ---------- 跑动辅助事件 ----------
+
+  vision.runningEvent =
+    doc["running_event"]
+    | false;
+
+  vision.runningCount =
+    doc["running_count"]
+    | 0;
 
   // ---------- 视觉火焰疑似 ----------
 
@@ -1108,14 +1123,15 @@ BuzzerMode wantedBuzzerMode() {
   if (fireEmergency) return BuzzerMode::FIRE;
   if (communicationOffline) return BuzzerMode::SILENT;
 
+  // Any formal warning, crowd, danger, or fire buzzer takes priority.
   switch (maxState(finalLeft, finalRight)) {
-    case RouteState::NORMAL: return BuzzerMode::SILENT;
     case RouteState::WARNING: return BuzzerMode::WARNING;
     case RouteState::CROWD: return BuzzerMode::CROWD;
     case RouteState::DANGER:
     case RouteState::FIRE: return BuzzerMode::FIRE;
+    case RouteState::NORMAL: break;
   }
-  return BuzzerMode::SILENT;
+  return vision.runningEvent ? BuzzerMode::RUNNING : BuzzerMode::SILENT;
 }
 
 
@@ -1137,6 +1153,7 @@ void updateBuzzer() {
     case BuzzerMode::SILENT: on = false; break;
     case BuzzerMode::WARNING: on = (elapsed % 2200UL) < 180UL; break;
     case BuzzerMode::CROWD: on = (elapsed % 300UL) < 150UL; break;
+    case BuzzerMode::RUNNING: on = (elapsed % 2000UL) < 80UL; break;
     case BuzzerMode::FIRE: on = true; break;
   }
   buzzerWrite(on);

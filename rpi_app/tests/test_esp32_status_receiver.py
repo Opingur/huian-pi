@@ -49,8 +49,8 @@ class Esp32StatusReceiverTests(unittest.TestCase):
         self.assertEqual(parsed.temperature_c, 36.5)
         self.assertEqual(parsed.received_at, 10.0)
 
-    def test_warning_and_danger_states_are_accepted(self):
-        for system_state in ("WARNING", "DANGER"):
+    def test_warning_crowd_and_danger_states_are_accepted(self):
+        for system_state in ("WARNING", "CROWD", "DANGER"):
             with self.subTest(system_state=system_state):
                 parsed = parse_esp32_status_message(
                     json.dumps(status_payload(system_state=system_state)),

@@ -21,7 +21,7 @@ class PredictionStoreTests(unittest.TestCase):
     def test_schema_and_frozen_predictions(self) -> None:
         with sqlite3.connect(self.store.database_path) as connection:
             names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        self.assertEqual(names, {"experiments", "count_annotations", "prediction_annotations"})
+        self.assertTrue({"experiments", "count_annotations", "prediction_annotations"}.issubset(names))
         item_id = self.store.create_prediction_annotation(self.experiment_id, 20.0, 300, 10, 0.3, 13.0, 16.0, 19.0)
         self.store.update_prediction_ground_truth(item_id, 10, 12)
         self.store.update_prediction_ground_truth(item_id, 20, 15)

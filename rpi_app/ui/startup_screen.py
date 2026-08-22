@@ -26,16 +26,16 @@ DEFAULT_BOLD_FONT = (
     "/usr/share/fonts/opentype/noto/"
     "NotoSansCJK-Bold.ttc"
 )
+WINDOWS_BOLD_FONT = "C:/Windows/Fonts/msyhbd.ttc"
+WINDOWS_REGULAR_FONT = "C:/Windows/Fonts/msyh.ttc"
 
 
 def _resolve_font(font_path: str | None) -> str:
-    # Splash 优先使用粗体；如果系统粗体不存在，再退回配置字体。
-    if Path(DEFAULT_BOLD_FONT).exists():
-        return DEFAULT_BOLD_FONT
-
-    if font_path and Path(font_path).exists():
-        return font_path
-
+    """Resolve a real Chinese font on Pi or Windows before drawing the startup screen."""
+    candidates = (DEFAULT_BOLD_FONT, font_path, WINDOWS_BOLD_FONT, WINDOWS_REGULAR_FONT)
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
     raise RuntimeError("startup Chinese font not found")
 
 

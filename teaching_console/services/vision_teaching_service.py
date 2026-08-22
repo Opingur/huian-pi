@@ -94,7 +94,7 @@ def load_vision_config(root: Path) -> VisionTeachingConfig:
 
 
 # These are source inputs declared by the corresponding final_dashboard_*.json
-# configurations.  They are deliberately not resolved from final_dashboard_videos/.
+# configurations.  They are deliberately not resolved from archived final Dashboard videos.
 TEACHING_CASES: tuple[tuple[str, str, Path], ...] = (
     ("000318", "人数增长", Path("test_data/iitb_final/000318.mp4")),
     ("000327", "目标跟踪 / Track ID", Path("test_data/000327.mp4")),

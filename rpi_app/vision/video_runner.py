@@ -23,7 +23,9 @@ from ui.flow_group_visualizer import build_flow_groups
 from vision.fire_detector import FireDetector, FireEvidenceTracker
 from vision.live_workers import LatestFireWorker, LatestFrameWorker
 from vision.people_flow import PeopleFlowAnalyzer
+from vision.running_detector import RunningDetector, aggregate_running
 from vision.tracker import PersonTracker
+from sources.video_source import VideoSource
 from vision.trajectory import TrajectoryAnalyzer
 
 
@@ -78,6 +80,7 @@ class TrackedFrameProcessor:
         self.predictor = CrowdPredictor(config["prediction"], config.get("crowd_calibration"))
         self.risk_engine = RiskEngine(config["warning_people"], config["danger_people"])
         self.trajectories = TrajectoryAnalyzer(config["tracking"])
+        self.running = RunningDetector(config.get("running_detection"))
         self.flow_risk = FlowRiskAnalyzer(config.get("flow_risk", {}))
         self.alarms = AlarmDebouncer(config["alarm"])
         self.explain_lock = ExplainTargetLock(config.get("display", {}).get("explain_lock_seconds", 1.0))
@@ -116,6 +119,9 @@ class TrackedFrameProcessor:
         motions_by_id = self.trajectories.update(
             tracks, frame_width, frame_height, source_timestamp, self.config.get("conflict_zone", []),
         )
+        running_by_id = self.running.update(tracks, source_timestamp)
+        for track_id, running in running_by_id.items():
+            motions_by_id.setdefault(track_id, {}).update(running)
         flow_groups = build_flow_groups(motions_by_id)
         explain_target_id = self.explain_lock.choose(
             motions_by_id, source_timestamp, self.config.get("display", {}).get("explain_track_id"),
@@ -140,6 +146,7 @@ class TrackedFrameProcessor:
             "visual_alarm": visual_alarm,
             "alarm_reason": alarm_reason,
         })
+        status.update(aggregate_running(running_by_id))
         return {
             "tracks": tracks,
             "status": status,
@@ -249,14 +256,11 @@ def run_tracked_video(
 ) -> None:
     """Read an OpenCV video and send each BGR frame to TrackedFrameProcessor."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    capture = cv2.VideoCapture(str(source_path))
-    if not capture.isOpened():
-        raise RuntimeError(f"Unable to open video: {source_path}")
-
-    fps = float(capture.get(cv2.CAP_PROP_FPS)) or 25.0
-    frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    source = VideoSource(source_path)
+    fps = source.fps
+    frame_count = source.frame_count
+    width = source.width
+    height = source.height
     processor = TrackedFrameProcessor(config, build_status)
     status_path = output_dir / "status.jsonl"
     output_name = config.get("output_video_name", f"{source_path.stem}_annotated.mp4")
@@ -280,10 +284,10 @@ def run_tracked_video(
     try:
         with status_path.open("w", encoding="utf-8") as status_file:
             while True:
-                success, frame_bgr = capture.read()
-                if not success:
+                item = source.read()
+                if item is None:
                     break
-                source_timestamp = _source_time(capture, frame_index, fps)
+                frame_bgr, source_timestamp = item
                 annotated, status, snapshot_saved = processor.process_frame(frame_bgr, source_timestamp)
                 if config.get("save_annotated_video", False):
                     if writer is None:
@@ -323,7 +327,7 @@ def run_tracked_video(
                         break
     finally:
         processor.close()
-        capture.release()
+        source.close()
         if writer is not None:
             writer.release()
         if config.get("display_window", False):

@@ -7,6 +7,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from teaching_console.ui_zoom import CONTROL_MASK, scaled_value
 from teaching_console.services.trajectory_teaching_service import (
     LAYER_DIRECTION,
     LAYER_RAW,
@@ -32,6 +33,8 @@ LAYER_LABELS = {
     LAYER_TRAIL: "显示轨迹",
     LAYER_DIRECTION: "显示方向",
 }
+
+BASE_VIDEO_SIZE = (640, 420)
 
 
 def format_heading(value: object) -> str:
@@ -67,6 +70,8 @@ class TrajectoryDirectionPage(ttk.Frame):
         self.closing = False
         self.request_token = 0
         self._image = None
+        self._display_frame_bgr = None
+        self._zoom_factor = 1.0
         self._packet: TrajectoryFramePacket | None = None
         self._wheel_tag = f"TrajectoryDirectionWheel_{id(self)}"
         self._wheel_targets: list[tk.Misc] = []
@@ -109,6 +114,8 @@ class TrajectoryDirectionPage(ttk.Frame):
                 widget.bindtags(tuple(tag for tag in widget.bindtags() if tag != self._wheel_tag))
 
     def _on_mousewheel(self, event):
+        if event.state & CONTROL_MASK:
+            return None
         if self.winfo_ismapped() and event.delta:
             steps = -int(event.delta / 120)
             self.canvas.yview_scroll(steps or (-1 if event.delta > 0 else 1), "units")
@@ -302,12 +309,20 @@ class TrajectoryDirectionPage(ttk.Frame):
             return frame_bgr
 
     def _render_image(self, frame_bgr) -> None:
+        self._display_frame_bgr = frame_bgr
         try:
             from PIL import Image, ImageTk
-            image = Image.fromarray(frame_bgr[:, :, ::-1]); image.thumbnail((640, 420))
+            image = Image.fromarray(frame_bgr[:, :, ::-1])
+            image.thumbnail(tuple(scaled_value(value, self._zoom_factor) for value in BASE_VIDEO_SIZE))
             self._image = ImageTk.PhotoImage(image); self.image_label.configure(image=self._image, text="")
         except Exception as error:
             self.image_label.configure(image="", text=f"无法显示画面：{error}")
+
+    def on_zoom_changed(self, factor: float) -> None:
+        self._zoom_factor = factor
+        if self._display_frame_bgr is not None:
+            self._render_image(self._display_frame_bgr)
+        self.after_idle(lambda: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
 
     def _refresh_track_choices(self, packet: TrajectoryFramePacket) -> None:
         ids = active_track_ids(packet.frame.rows)

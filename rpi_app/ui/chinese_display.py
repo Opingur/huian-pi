@@ -45,6 +45,25 @@ def _load_font(font_path: str | None, font_size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+
+def _load_latin_font(font_size: int) -> ImageFont.FreeTypeFont:
+    """Compatibility accessor: the resolved primary font also covers Latin text."""
+    return _load_font(None, font_size)
+
+
+def _load_symbol_font(font_size: int) -> ImageFont.FreeTypeFont:
+    """Compatibility accessor: the resolved primary font also covers common symbols."""
+    return _load_font(None, font_size)
+
+
+def _text_runs(
+    text: str,
+    primary: ImageFont.FreeTypeFont,
+    _latin: ImageFont.FreeTypeFont,
+    _symbol: ImageFont.FreeTypeFont,
+) -> list[tuple[str, ImageFont.FreeTypeFont]]:
+    """Keep one actual font run; modern Pi/Windows CJK fonts cover this UI text."""
+    return [(text, primary)] if text else []
 def _draw_text(image, entries, font_path: str | None, default_size: int):
     """一次 PIL 转换完成一帧中全部文字，避免 OpenCV 中文乱码。"""
     canvas = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
