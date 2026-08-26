@@ -283,7 +283,13 @@ class VisionTeachingWorker:
                 return
             token, operation, args = command
             try:
-                self.results.put(WorkerResult(token, operation, getattr(self.service, operation)(*args)))
+                if operation == "analyze_difficult_frames":
+                    def report_progress(completed: int, total: int) -> None:
+                        self.results.put(WorkerResult(token, operation + "_progress", (completed, total)))
+                    value = getattr(self.service, operation)(*args, progress_callback=report_progress)
+                else:
+                    value = getattr(self.service, operation)(*args)
+                self.results.put(WorkerResult(token, operation, value))
             except Exception as error:
                 self.results.put(WorkerResult(token, operation, error=str(error)))
 

@@ -299,7 +299,7 @@ class FireEvidenceTracker:
             "fire_display_detections": display_detections,
             "fire_bbox_temporal_hold": held_fire,
             "fire_alert_temporal_hold": bool(fire_recent and not raw_fire),
-            "fire_confirmed": False,
+            "fire_confirmed": bool(self.enabled and self.stable_fire),
         }
 def single_image_fire_status(result: Mapping[str, object], enabled: bool) -> dict[str, object]:
     """Image mode reports raw visual evidence only; it never claims temporal confirmation."""

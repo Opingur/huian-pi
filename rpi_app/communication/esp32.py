@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import time
 import warnings
@@ -15,8 +15,14 @@ UART_FIELDS = (
     "vision_risk",
     "crowd_index",
     "total_people",
+    "left_exit_risk",
+    "right_exit_risk",
+    "left_exit_count",
+    "right_exit_count",
+    "recommended_direction",
     "direction_conflict",
     "vision_fire_suspected",
+    "fire_confirmed",
     "vision_smoke_suspected",
     "vision_fire_confidence",
     "vision_smoke_confidence",
@@ -49,6 +55,17 @@ ESP32_SYSTEM_STATES = frozenset({
 })
 _MAX_RX_BUFFER_BYTES = 4096
 
+# Optional ESP32 fields are kept only for read-only teacher/display reporting.
+# They are deliberately excluded from the Pi-to-ESP32 UART payload schema.
+ESP32_WEB_OPTIONAL_FIELDS = (
+    "mq2_phase", "mq2_ready", "mq2_warmup_remaining_ms",
+    "mq2_calibration_remaining_ms", "mq2_baseline", "mq2_trigger_threshold",
+    "mq2_release_threshold", "humidity_percent", "manual_alarm",
+    "manual_alarm_remaining_ms", "manual_alarm_source", "recommended_direction",
+    "left_exit_state", "right_exit_state", "left_exit_count", "right_exit_count",
+    "arrow_direction",
+)
+
 
 @dataclass(frozen=True)
 class Esp32Status:
@@ -64,7 +81,7 @@ class Esp32Status:
     system_state: str
     vision_valid: bool
     received_at: float
-
+    extras: Mapping[str, object] = field(default_factory=dict)
 
 def build_uart_payload(status: Mapping[str, object]) -> dict[str, object]:
     """Select only the stable Pi-to-ESP32 protocol-v1 fields."""
@@ -74,8 +91,14 @@ def build_uart_payload(status: Mapping[str, object]) -> dict[str, object]:
         "vision_risk": str(status.get("vision_risk", "NORMAL")),
         "crowd_index": float(status.get("crowd_index", 0.0)),
         "total_people": int(status.get("total_people", 0)),
+        "left_exit_risk": str(status.get("left_exit_risk", "NORMAL")),
+        "right_exit_risk": str(status.get("right_exit_risk", "NORMAL")),
+        "left_exit_count": int(status.get("left_exit_count", status.get("left_people", 0))),
+        "right_exit_count": int(status.get("right_exit_count", status.get("right_people", 0))),
+        "recommended_direction": str(status.get("recommended_direction", "NONE")),
         "direction_conflict": bool(status.get("direction_conflict", False)),
         "vision_fire_suspected": bool(status.get("vision_fire_suspected", False)),
+        "fire_confirmed": bool(status.get("fire_confirmed", False)),
         # Protocol-v1 compatibility: formal smoke sensing is MQ-2 on ESP32, never visual Smoke.
         "vision_smoke_suspected": False,
         "vision_fire_confidence": float(status.get("vision_fire_confidence", 0.0)),
@@ -138,6 +161,7 @@ def parse_esp32_status_message(line: str, *, received_at: float | None = None) -
         system_state=payload["system_state"],
         vision_valid=payload["vision_valid"],
         received_at=time.monotonic() if received_at is None else float(received_at),
+        extras={key: payload[key] for key in ESP32_WEB_OPTIONAL_FIELDS if key in payload and (payload[key] is None or isinstance(payload[key], (str, bool, int, float)))},
     )
 
 

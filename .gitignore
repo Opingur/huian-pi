@@ -72,3 +72,4 @@ models/experiments/
 demo_cases/*
 !demo_cases/README.md
 teacher_remote.json
+showcase_bridge.json

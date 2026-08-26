@@ -11,7 +11,9 @@ class Esp32PublisherTests(unittest.TestCase):
         self.status = {
             "protocol_version": 1, "timestamp": 123, "vision_risk": "DANGER", "crowd_index": 0.83,
             "total_people": 16, "direction_conflict": True,
-            "vision_fire_suspected": True, "vision_smoke_suspected": False,
+            "left_exit_risk": "CROWD", "right_exit_risk": "NORMAL",
+            "left_exit_count": 6, "right_exit_count": 1, "recommended_direction": "RIGHT",
+            "vision_fire_suspected": True, "fire_confirmed": True, "vision_smoke_suspected": False,
             "vision_fire_confidence": 0.82, "vision_smoke_confidence": 0.0,
             "bbox": [1, 2, 3, 4], "flow_groups": [{"id": 1}], "predicted_people_10s": 20,
         }
@@ -19,6 +21,9 @@ class Esp32PublisherTests(unittest.TestCase):
     def test_payload_contains_only_protocol_fields(self):
         self.assertEqual(tuple(build_uart_payload(self.status)), UART_FIELDS)
         self.assertNotIn("bbox", build_uart_payload(self.status))
+        payload = build_uart_payload(self.status)
+        self.assertEqual(payload["left_exit_risk"], "CROWD")
+        self.assertEqual(payload["recommended_direction"], "RIGHT")
 
     def test_message_is_compact_json_with_one_newline(self):
         message = encode_uart_message(self.status)
@@ -43,14 +48,14 @@ class Esp32PublisherTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "serial port is not configured"):
             publisher.send_status(self.status, source_timestamp=0.0)
 
-    def test_fire_state_encodes_while_visual_smoke_compatibility_is_fixed_off(self):
-        for suspected in (False, True):
-            status = dict(self.status, vision_fire_suspected=suspected, vision_smoke_suspected=True, vision_smoke_confidence=0.91)
+    def test_confirmed_fire_is_sent_while_visual_smoke_stays_fixed_off(self):
+        for suspected, confirmed in ((False, False), (True, True)):
+            status = dict(self.status, vision_fire_suspected=suspected, fire_confirmed=confirmed, vision_smoke_suspected=True, vision_smoke_confidence=0.91)
             payload = build_uart_payload(status)
             self.assertEqual(payload["vision_fire_suspected"], suspected)
+            self.assertEqual(payload["fire_confirmed"], confirmed)
             self.assertFalse(payload["vision_smoke_suspected"])
             self.assertEqual(payload["vision_smoke_confidence"], 0.0)
-
     def test_interval_limits_repeated_video_or_camera_snapshots(self):
         publisher = ESP32Publisher({"enabled": True, "dry_run": True, "send_interval_seconds": 1.0})
         self.assertTrue(publisher.send_status(self.status, source_timestamp=0.0))

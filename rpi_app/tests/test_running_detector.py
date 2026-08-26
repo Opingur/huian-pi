@@ -29,9 +29,22 @@ class RunningDetectorTests(unittest.TestCase):
 
     def test_one_frame_jump_is_not_running(self):
         self.update(0.0, 0)
-        result = self.update(0.4, 1000)
+        result = self.detector.update([track(1000, height=300)], 0.4)[7]
         self.assertFalse(result["running"])
         self.assertEqual(result["normalized_speed"], 0.0)
+
+    def test_close_range_rapid_continuous_motion_triggers(self):
+        detector = RunningDetector({
+            "window_seconds": 0.7, "enter_threshold": 1.0, "exit_threshold": 0.55,
+            "confirm_seconds": 0.2, "release_seconds": 0.5, "minimum_track_history": 0.35,
+            "max_sample_speed": 5.0, "max_sample_gap_seconds": 0.85,
+            "max_scale_change_ratio": 1.45, "pixel_enter_threshold": 180,
+            "pixel_exit_threshold": 120,
+        })
+        for time, x in ((0.0, 0), (0.2, 90), (0.4, 180), (0.65, 292)):
+            result = detector.update([track(x)], time)[7]
+        self.assertTrue(result["running"])
+        self.assertGreater(result["pixel_speed"], 180)
 
     def test_exit_hysteresis_and_multiple_ids(self):
         for time, x in ((0.0, 0), (0.3, 40), (0.6, 80), (0.9, 120)):

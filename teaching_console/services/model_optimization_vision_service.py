@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from teaching_console.services.vision_teaching_service import MODE_DETECT, MODE_RAW, VisionTeachingService
 
@@ -53,7 +54,9 @@ class ModelOptimizationVisionService:
     def detect(self, frame_index: int):
         return self._vision.read_frame(frame_index, MODE_DETECT)
 
-    def analyze_difficult_frames(self, maximum: int = 25) -> tuple[DifficultFrame, ...]:
+    def analyze_difficult_frames(
+        self, maximum: int = 25, progress_callback: Callable[[int, int], None] | None = None,
+    ) -> tuple[DifficultFrame, ...]:
         if self.video is None:
             raise RuntimeError("请先选择一个视频。")
         maximum = max(5, min(25, int(maximum)))
@@ -63,7 +66,7 @@ class ModelOptimizationVisionService:
         indices = sorted({round(index * (self.video.total_frames - 1) / max(1, sample_count - 1)) for index in range(sample_count)})
         candidates: list[DifficultFrame] = []
         prior_count: int | None = None
-        for frame_index in indices:
+        for completed, frame_index in enumerate(indices, start=1):
             packet = self.detect(frame_index)
             confidences = [row.confidence for row in packet.rows]
             count = len(packet.rows)
@@ -72,24 +75,26 @@ class ModelOptimizationVisionService:
             reasons: list[str] = []
             score = float(count) * 2.0
             if count >= 5:
-                reasons.append("当前人数较多")
+                reasons.append("画面里人数较多")
                 score += count
             low_confidence = sum(value < 0.55 for value in confidences)
             if low_confidence:
-                reasons.append(f"低置信度 person {low_confidence} 个")
+                reasons.append(f"AI 看得不太确定的人有 {low_confidence} 个")
                 score += low_confidence * 2.0
             if prior_count is not None and abs(count - prior_count) >= 2:
-                reasons.append("连续采样人数明显跳变")
+                reasons.append("前后画面人数变化明显")
                 score += abs(count - prior_count) * 2.0
             if count >= 2 and not reasons:
-                reasons.append("多人同框，建议检查遮挡")
+                reasons.append("多人靠近，建议检查遮挡")
                 score += 0.5
             if not reasons:
-                reasons.append("均匀抽样补充场景")
+                reasons.append("补充不同场景")
             candidates.append(DifficultFrame(
                 frame_index, packet.seconds, count, average, minimum, tuple(reasons), score,
             ))
             prior_count = count
+            if progress_callback is not None:
+                progress_callback(completed, len(indices))
         minimum_gap = max(1, self.video.total_frames // max(1, maximum * 2))
         return select_difficult_frames(candidates, maximum, minimum_gap)
 

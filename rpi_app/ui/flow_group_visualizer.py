@@ -8,12 +8,19 @@ from typing import Mapping
 import cv2
 
 
+# OpenCV canvas colours are BGR.  A is orange and B is blue everywhere:
+# bounding boxes, trajectories, arrows, legend dots, and their text labels.
 FLOW_GROUPS = (
-    ("A", (255, 150, 45)),
-    ("B", (45, 150, 255)),
+    ("A", (45, 150, 255)),
+    ("B", (255, 150, 45)),
     ("C", (200, 90, 190)),
 )
 WEAK_COLOR = (175, 175, 175)
+
+
+def _text_color(bgr_color: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Convert an OpenCV BGR colour for the Pillow RGB text renderer."""
+    return tuple(reversed(bgr_color))
 
 
 def _angle_distance(first: float, second: float) -> float:
@@ -74,7 +81,7 @@ def draw_flow_tracks(image, detections, motions, options, flow_groups, text_entr
             cv2.rectangle(image, (x1, y1), (x2, y2), color, 4 if is_highlighted else 2)
         if options.get("show_track_id", True):
             label = f"{group.get('label', '·')}-{track_id}" if group else f"编号 {track_id}"
-            text_entries.append(((x1, max(2, y1 - 24)), label, color, 18))
+            text_entries.append(((x1, max(2, y1 - 24)), label, _text_color(color), 18))
     for track_id, motion in motions.items():
         pixels = [(int(x * width), int(y * height)) for _, x, y in motion.get("trail", [])]
         group = flow_groups.get(int(track_id), {})
@@ -129,7 +136,7 @@ def draw_flow_tracks(image, detections, motions, options, flow_groups, text_entr
             cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
         if options.get("show_track_id", True):
             label = f"{track_id} 跑动" if is_running else (f"{group['label']}-{track_id}" if group else f"编号 {track_id}")
-            text_entries.append(((x1, max(2, y1 - 24)), label, color, 18 if is_highlighted or is_running else 15))
+            text_entries.append(((x1, max(2, y1 - 24)), label, _text_color(color), 18 if is_highlighted or is_running else 15))
     for track_id, motion in motions.items():
         group = flow_groups.get(int(track_id), {})
         is_highlighted = highlighted_id is not None and int(track_id) == int(highlighted_id)
@@ -158,4 +165,4 @@ def draw_flow_legend(image, flow_groups, text_entries) -> None:
             display_label = f"{chr(ord('A') + int(label))}流"
         except (TypeError, ValueError):
             display_label = f"{label}流"
-        text_entries.append(((position[0] + 23, position[1]), display_label, active[label], 21))
+        text_entries.append(((position[0] + 23, position[1]), display_label, _text_color(active[label]), 21))

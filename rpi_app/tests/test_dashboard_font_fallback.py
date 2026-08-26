@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from ui.chinese_display import _draw_text, _load_font, _load_latin_font, _load_symbol_font, _text_runs
-from ui.flow_group_visualizer import draw_flow_legend
+from ui.flow_group_visualizer import FLOW_GROUPS, draw_flow_legend
 
 
 class DashboardFontFallbackTests(unittest.TestCase):
@@ -49,6 +49,19 @@ class DashboardFontFallbackTests(unittest.TestCase):
         self._assert_text_has_no_missing_glyphs(" ".join(labels))
         rendered = _draw_text(image, entries, None, 24)
         self.assertGreater(int(np.count_nonzero(rendered)), 0)
+
+    def test_flow_legend_text_uses_the_same_visible_color_as_its_dot(self):
+        image = np.zeros((160, 300, 3), dtype=np.uint8)
+        entries = []
+        a_color, b_color = FLOW_GROUPS[0][1], FLOW_GROUPS[1][1]
+        draw_flow_legend(image, {
+            1: {"label": "A", "color": a_color},
+            2: {"label": "B", "color": b_color},
+        }, entries)
+        self.assertEqual(image[26, 175].tolist(), list(a_color))
+        self.assertEqual(image[60, 175].tolist(), list(b_color))
+        self.assertEqual(entries[0][2], tuple(reversed(a_color)))
+        self.assertEqual(entries[1][2], tuple(reversed(b_color)))
 
     def test_required_mixed_text_renders_through_the_unified_helper(self):
         image = np.zeros((100, 1280, 3), dtype=np.uint8)

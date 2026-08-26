@@ -7,6 +7,7 @@ loss.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import subprocess
 import uuid
@@ -66,8 +67,23 @@ class ResearchStore:
                     video_path TEXT NOT NULL,
                     experiment_type TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
+                    purpose TEXT NOT NULL DEFAULT '',
+                    participants TEXT NOT NULL DEFAULT '',
+                    experiment_scene TEXT NOT NULL DEFAULT '',
+                    experiment_date TEXT NOT NULL DEFAULT '',
+                    findings TEXT NOT NULL DEFAULT '',
+                    cause_analysis TEXT NOT NULL DEFAULT '',
+                    next_improvement TEXT NOT NULL DEFAULT '',
+                    student_reflection TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     git_commit TEXT
+                );
+                CREATE TABLE IF NOT EXISTS research_activity_log (
+                    id TEXT PRIMARY KEY,
+                    experiment_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    action_type TEXT NOT NULL,
+                    description TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS count_annotations (
                     id TEXT PRIMARY KEY,
@@ -99,6 +115,7 @@ class ResearchStore:
                     error_10 REAL,
                     error_20 REAL,
                     error_30 REAL,
+                    prediction_horizons TEXT NOT NULL DEFAULT '[10, 20, 30]',
                     note TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -127,6 +144,8 @@ class ResearchStore:
                     average_confidence REAL,
                     minimum_confidence REAL,
                     recommendation_reasons TEXT NOT NULL DEFAULT '',
+                    student_reason TEXT NOT NULL DEFAULT '',
+                    annotation_completed INTEGER NOT NULL DEFAULT 0,
                     kept INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -145,6 +164,7 @@ class ResearchStore:
                 );
                 CREATE TABLE IF NOT EXISTS model_experiments (
                     id TEXT PRIMARY KEY,
+                    research_experiment_id TEXT,
                     name TEXT NOT NULL,
                     dataset_name TEXT NOT NULL,
                     base_model_path TEXT NOT NULL,
@@ -182,19 +202,158 @@ class ResearchStore:
                     ON model_experiments(dataset_name, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_model_deployments_experiment
                     ON model_deployments(model_experiment_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_research_activity_experiment
+                    ON research_activity_log(experiment_id, timestamp);
                 """
+            )
+            self._migrate_experiment_columns(connection)
+            self._migrate_model_experiment_columns(connection)
+            self._migrate_prediction_annotation_columns(connection)
+            self._migrate_detection_annotation_columns(connection)
+
+    @staticmethod
+    def _migrate_experiment_columns(connection: sqlite3.Connection) -> None:
+        """Add child-friendly research fields without rewriting existing rows."""
+        existing = {str(row[1]) for row in connection.execute("PRAGMA table_info(experiments)")}
+        additions = {
+            "purpose": "TEXT NOT NULL DEFAULT ''",
+            "participants": "TEXT NOT NULL DEFAULT ''",
+            "experiment_scene": "TEXT NOT NULL DEFAULT ''",
+            "experiment_date": "TEXT NOT NULL DEFAULT ''",
+            "findings": "TEXT NOT NULL DEFAULT ''",
+            "cause_analysis": "TEXT NOT NULL DEFAULT ''",
+            "next_improvement": "TEXT NOT NULL DEFAULT ''",
+            "student_reflection": "TEXT NOT NULL DEFAULT ''",
+        }
+        for name, definition in additions.items():
+            if name not in existing:
+                connection.execute(f"ALTER TABLE experiments ADD COLUMN {name} {definition}")
+
+    @staticmethod
+    def _migrate_model_experiment_columns(connection: sqlite3.Connection) -> None:
+        existing = {str(row[1]) for row in connection.execute("PRAGMA table_info(model_experiments)")}
+        if "research_experiment_id" not in existing:
+            connection.execute("ALTER TABLE model_experiments ADD COLUMN research_experiment_id TEXT")
+
+    @staticmethod
+    def _migrate_prediction_annotation_columns(connection: sqlite3.Connection) -> None:
+        """Keep legacy prediction evidence readable while recording its displayed horizons."""
+        existing = {str(row[1]) for row in connection.execute("PRAGMA table_info(prediction_annotations)")}
+        if "prediction_horizons" not in existing:
+            connection.execute(
+                "ALTER TABLE prediction_annotations ADD COLUMN prediction_horizons "
+                "TEXT NOT NULL DEFAULT '[10, 20, 30]'"
+            )
+
+    @staticmethod
+    def _migrate_detection_annotation_columns(connection: sqlite3.Connection) -> None:
+        """Add child-observation evidence without discarding older box labels."""
+        existing = {str(row[1]) for row in connection.execute("PRAGMA table_info(detection_frame_annotations)")}
+        if "student_reason" not in existing:
+            connection.execute(
+                "ALTER TABLE detection_frame_annotations ADD COLUMN student_reason TEXT NOT NULL DEFAULT ''"
+            )
+        if "annotation_completed" not in existing:
+            connection.execute(
+                "ALTER TABLE detection_frame_annotations ADD COLUMN annotation_completed INTEGER NOT NULL DEFAULT 0"
+            )
+            # Existing projects were created before an explicit completion flag.
+            # Preserve their non-empty box annotations as usable historical work.
+            connection.execute(
+                "UPDATE detection_frame_annotations SET annotation_completed = 1 "
+                "WHERE EXISTS (SELECT 1 FROM detection_person_boxes "
+                "WHERE detection_person_boxes.frame_annotation_id = detection_frame_annotations.id)"
             )
 
     def create_experiment(
-        self, name: str, video_path: str | Path, experiment_type: str, description: str = ""
+        self,
+        name: str,
+        video_path: str | Path,
+        experiment_type: str,
+        description: str = "",
+        *,
+        purpose: str = "",
+        participants: str = "",
+        experiment_scene: str = "",
+        experiment_date: str = "",
+        findings: str = "",
+        cause_analysis: str = "",
+        next_improvement: str = "",
+        student_reflection: str = "",
     ) -> str:
         experiment_id = uuid.uuid4().hex
         with self._connection() as connection:
             connection.execute(
-                "INSERT INTO experiments VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (experiment_id, name, str(video_path), experiment_type, description, _utc_now(), _git_commit(self.project_root)),
+                "INSERT INTO experiments "
+                "(id, name, video_path, experiment_type, description, purpose, participants, experiment_scene, experiment_date, "
+                "findings, cause_analysis, next_improvement, student_reflection, created_at, git_commit) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    experiment_id, name, str(video_path), experiment_type, description, purpose, participants,
+                    experiment_scene, experiment_date, findings, cause_analysis, next_improvement, student_reflection,
+                    _utc_now(), _git_commit(self.project_root),
+                ),
             )
+        self.log_activity(experiment_id, "create_experiment", f"创建实验：{name}")
         return experiment_id
+
+    def update_experiment_record(
+        self,
+        experiment_id: str,
+        *,
+        purpose: str | None = None,
+        participants: str | None = None,
+        experiment_scene: str | None = None,
+        experiment_date: str | None = None,
+        findings: str | None = None,
+        cause_analysis: str | None = None,
+        next_improvement: str | None = None,
+        student_reflection: str | None = None,
+    ) -> None:
+        values = {
+            key: value
+            for key, value in {
+                "purpose": purpose,
+                "participants": participants,
+                "experiment_scene": experiment_scene,
+                "experiment_date": experiment_date,
+                "findings": findings,
+                "cause_analysis": cause_analysis,
+                "next_improvement": next_improvement,
+                "student_reflection": student_reflection,
+            }.items()
+            if value is not None
+        }
+        if not values:
+            return
+        assignments = ", ".join(f"{name} = ?" for name in values)
+        with self._connection() as connection:
+            result = connection.execute(
+                f"UPDATE experiments SET {assignments} WHERE id = ?", (*values.values(), experiment_id)
+            )
+            if result.rowcount == 0:
+                raise KeyError(f"未知实验：{experiment_id}")
+        self.log_activity(experiment_id, "save_experiment_record", "保存实验记录")
+
+    def log_activity(
+        self, experiment_id: str, action_type: str, description: str, *, timestamp: str | None = None
+    ) -> str:
+        activity_id = uuid.uuid4().hex
+        with self._connection() as connection:
+            connection.execute(
+                "INSERT INTO research_activity_log (id, experiment_id, timestamp, action_type, description) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (activity_id, experiment_id, timestamp or _utc_now(), action_type, description),
+            )
+        return activity_id
+
+    def activities(self, experiment_id: str) -> list[sqlite3.Row]:
+        with self._connection() as connection:
+            connection.row_factory = sqlite3.Row
+            return connection.execute(
+                "SELECT * FROM research_activity_log WHERE experiment_id = ? ORDER BY timestamp, rowid",
+                (experiment_id,),
+            ).fetchall()
 
     def list_experiments(self) -> list[sqlite3.Row]:
         with self._connection() as connection:
@@ -219,16 +378,20 @@ class ResearchStore:
 
     def update_system_count(self, annotation_id: str, system_count: int) -> None:
         with self._connection() as connection:
-            row = connection.execute("SELECT ground_truth_count FROM count_annotations WHERE id = ?", (annotation_id,)).fetchone()
+            row = connection.execute(
+                "SELECT experiment_id, video_time_seconds, ground_truth_count FROM count_annotations WHERE id = ?",
+                (annotation_id,),
+            ).fetchone()
             if row is None:
                 raise KeyError(f"未知标注任务：{annotation_id}")
-            error = None if row[0] is None else abs(system_count - row[0])
+            error = None if row[2] is None else abs(system_count - row[2])
             connection.execute("UPDATE count_annotations SET system_count = ?, absolute_error = ?, updated_at = ? WHERE id = ?", (system_count, error, _utc_now(), annotation_id))
+        self.log_activity(row[0], "view_ai_result", f"查看第 {float(row[1]):.1f} 秒的 AI 人数结果")
 
     def update_ground_truth(self, experiment_id: str, sample_index: int, ground_truth_count: int, note: str = "") -> None:
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT system_count FROM count_annotations WHERE experiment_id = ? AND sample_index = ?",
+                "SELECT video_time_seconds, system_count FROM count_annotations WHERE experiment_id = ? AND sample_index = ?",
                 (experiment_id, sample_index),
             ).fetchone()
             if row is None:
@@ -236,8 +399,9 @@ class ResearchStore:
             connection.execute(
                 "UPDATE count_annotations SET ground_truth_count = ?, absolute_error = ?, note = ?, updated_at = ? "
                 "WHERE experiment_id = ? AND sample_index = ?",
-                (ground_truth_count, None if row[0] is None else abs(row[0] - ground_truth_count), note, _utc_now(), experiment_id, sample_index),
+                (ground_truth_count, None if row[1] is None else abs(row[1] - ground_truth_count), note, _utc_now(), experiment_id, sample_index),
             )
+        self.log_activity(experiment_id, "complete_count_annotation", f"完成第 {float(row[0]):.1f} 秒人数人工标注")
 
     def annotations(self, experiment_id: str) -> list[sqlite3.Row]:
         with self._connection() as connection:
@@ -254,15 +418,17 @@ class ResearchStore:
             return int(completed), int(total)
 
 
-    def create_prediction_annotation(self, experiment_id: str, anchor_time_seconds: float, anchor_frame_index: int, current_system_count: int, prediction_slope: float | None, prediction_10: float | None, prediction_20: float | None, prediction_30: float | None, note: str = "") -> str:
+    def create_prediction_annotation(self, experiment_id: str, anchor_time_seconds: float, anchor_frame_index: int, current_system_count: int, prediction_slope: float | None, prediction_10: float | None, prediction_20: float | None, prediction_30: float | None, note: str = "", prediction_horizons: tuple[int, int, int] = (10, 20, 30)) -> str:
         annotation_id, created = uuid.uuid4().hex, _utc_now()
         with self._connection() as connection:
             connection.execute(
-                "INSERT INTO prediction_annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)",
-                (annotation_id, experiment_id, anchor_time_seconds, anchor_frame_index, current_system_count, prediction_slope, prediction_10, prediction_20, prediction_30, note, created, created),
+                "INSERT INTO prediction_annotations "
+                "(id, experiment_id, anchor_time_seconds, anchor_frame_index, current_system_count, prediction_slope, "
+                "prediction_10, prediction_20, prediction_30, prediction_horizons, note, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (annotation_id, experiment_id, anchor_time_seconds, anchor_frame_index, current_system_count, prediction_slope, prediction_10, prediction_20, prediction_30, json.dumps(list(prediction_horizons)), note, created, created),
             )
         return annotation_id
-
     def prediction_annotations(self, experiment_id: str) -> list[sqlite3.Row]:
         with self._connection() as connection:
             connection.row_factory = sqlite3.Row
@@ -379,6 +545,8 @@ class ResearchStore:
         average_confidence: float | None = None,
         minimum_confidence: float | None = None,
         recommendation_reasons: str = "",
+        student_reason: str = "",
+        annotation_completed: bool = False,
         kept: bool = True,
     ) -> str:
         """Persist a recommended or manually selected raw video frame."""
@@ -392,8 +560,8 @@ class ResearchStore:
             connection.execute(
                 "INSERT INTO detection_frame_annotations "
                 "(id, project_id, source_video, frame_index, video_time_seconds, image_path, image_width, image_height, "
-                "system_count, average_confidence, minimum_confidence, recommendation_reasons, kept, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "system_count, average_confidence, minimum_confidence, recommendation_reasons, student_reason, annotation_completed, kept, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     frame_id,
                     project_id,
@@ -407,6 +575,8 @@ class ResearchStore:
                     average_confidence,
                     minimum_confidence,
                     recommendation_reasons,
+                    student_reason,
+                    int(bool(annotation_completed)),
                     int(bool(kept)),
                     created,
                     created,
@@ -423,6 +593,8 @@ class ResearchStore:
         average_confidence: float | None = None,
         minimum_confidence: float | None = None,
         recommendation_reasons: str | None = None,
+        student_reason: str | None = None,
+        annotation_completed: bool | None = None,
         kept: bool | None = None,
     ) -> None:
         values: dict[str, object] = {}
@@ -436,6 +608,10 @@ class ResearchStore:
             values["minimum_confidence"] = float(minimum_confidence)
         if recommendation_reasons is not None:
             values["recommendation_reasons"] = recommendation_reasons
+        if student_reason is not None:
+            values["student_reason"] = student_reason
+        if annotation_completed is not None:
+            values["annotation_completed"] = int(bool(annotation_completed))
         if kept is not None:
             values["kept"] = int(bool(kept))
         if not values:
@@ -542,20 +718,24 @@ class ResearchStore:
         dataset_name: str,
         base_model_path: str | Path,
         *,
+        research_experiment_id: str | None = None,
         epochs: int | None = None,
         imgsz: int | None = None,
         training_package_path: str | Path | None = None,
         note: str = "",
     ) -> str:
+        if research_experiment_id is not None and self.get_experiment(research_experiment_id) is None:
+            raise KeyError(f"未知研究实验：{research_experiment_id}")
         experiment_id, created = uuid.uuid4().hex, _utc_now()
         with self._connection() as connection:
             connection.execute(
                 "INSERT INTO model_experiments "
-                "(id, name, dataset_name, base_model_path, epochs, imgsz, training_package_path, candidate_model_path, "
+                "(id, research_experiment_id, name, dataset_name, base_model_path, epochs, imgsz, training_package_path, candidate_model_path, "
                 "result_metadata_path, status, candidate_state, note, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'draft', 'pending', ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'draft', 'pending', ?, ?, ?)",
                 (
                     experiment_id,
+                    research_experiment_id,
                     name,
                     dataset_name,
                     str(base_model_path),
@@ -582,6 +762,14 @@ class ResearchStore:
             return connection.execute(
                 "SELECT * FROM model_experiments WHERE dataset_name = ? ORDER BY created_at DESC, rowid DESC",
                 (dataset_name,),
+            ).fetchall()
+
+    def model_experiments_for_research(self, research_experiment_id: str) -> list[sqlite3.Row]:
+        with self._connection() as connection:
+            connection.row_factory = sqlite3.Row
+            return connection.execute(
+                "SELECT * FROM model_experiments WHERE research_experiment_id = ? ORDER BY created_at DESC, rowid DESC",
+                (research_experiment_id,),
             ).fetchall()
 
     def set_model_candidate(

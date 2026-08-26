@@ -11,6 +11,8 @@
   5. 有源蜂鸣器报警
   6. 环境火情融合
   7. ESP32 -> Raspberry Pi 状态回传
+  8. PS2 摇杆 SW 一键人工报警
+  9. 双 MAX7219 左右楼梯口分流箭头
 
   依赖：
   - DHT sensor library
@@ -69,6 +71,16 @@ constexpr uint8_t DHT_PIN = 4;
 constexpr uint8_t PI_RX_PIN = 16;   // Pi TX -> ESP32 RX
 constexpr uint8_t PI_TX_PIN = 17;   // Pi RX <- ESP32 TX
 
+// PS2 摇杆：仅使用 SW 按键；INPUT_PULLUP，按下为 LOW。
+constexpr uint8_t MANUAL_ALARM_SW_PIN = 22;
+
+// 两块级联 MAX7219 8x8 点阵：DIN=21，CLK=18，CS=19。
+constexpr uint8_t MAX7219_DIN_PIN = 21;
+constexpr uint8_t MAX7219_CLK_PIN = 18;
+constexpr uint8_t MAX7219_CS_PIN = 19;
+constexpr uint8_t MAX7219_DEVICE_COUNT = 2;
+constexpr uint8_t MAX7219_INTENSITY = 3;
+
 
 // ==========================================================
 // 2. 通信与采样参数
@@ -81,6 +93,11 @@ constexpr uint32_t VISION_TIMEOUT_MS = 5000UL;
 constexpr uint32_t MQ2_INTERVAL_MS = 500UL;
 constexpr uint32_t DHT_INTERVAL_MS = 2500UL;
 constexpr uint32_t REPORT_INTERVAL_MS = 1000UL;
+
+constexpr uint32_t BUTTON_DEBOUNCE_MS = 40UL;
+constexpr uint32_t MANUAL_ALARM_DURATION_MS = 20000UL;
+constexpr uint32_t MANUAL_ALARM_RGB_BLINK_MS = 120UL;
+constexpr uint32_t MANUAL_ALARM_BUZZER_HALF_PERIOD_MS = 80UL;
 
 
 // ==========================================================
@@ -114,12 +131,22 @@ enum class BuzzerMode : uint8_t {
   WARNING,
   CROWD,
   RUNNING,
+  MANUAL_ALARM,
   FIRE
 };
 
 
 // ==========================================================
 // 5. 树莓派视觉数据
+// ==========================================================
+
+enum class ArrowDirection : uint8_t {
+  NONE,
+  LEFT,
+  RIGHT
+};
+
+
 // ==========================================================
 
 struct VisionData {
@@ -146,6 +173,9 @@ struct VisionData {
   float smokeConfidence = 0.0F;
 
   bool fireConfirmed = false;
+  // Pi 明确给出分流方向时优先使用；未提供时固件再按两侧风险兜底。
+  ArrowDirection recommendedDirection = ArrowDirection::NONE;
+  bool recommendedDirectionProvided = false;
 
   uint32_t lastRxMs = 0;
 
@@ -201,6 +231,23 @@ uint32_t lastReportMs = 0;
 
 BuzzerMode currentBuzzerMode = BuzzerMode::SILENT;
 uint32_t buzzerModeStartMs = 0;
+
+bool manualAlarm = false;
+uint32_t manualAlarmStartMs = 0;
+bool lastButtonReading = HIGH;
+bool stableButtonState = HIGH;
+uint32_t lastButtonChangeMs = 0;
+
+ArrowDirection currentArrowDirection = ArrowDirection::NONE;
+
+const byte ARROW_RIGHT[8] = {
+  B00001000, B00001100, B00001110, B11111111,
+  B11111111, B00001110, B00001100, B00001000
+};
+const byte ARROW_LEFT[8] = {
+  B00010000, B00110000, B01110000, B11111111,
+  B11111111, B01110000, B00110000, B00010000
+};
 
 
 // ==========================================================
@@ -447,6 +494,86 @@ void showCommunicationOffline() {
 // 17. 解析 Raspberry Pi -> ESP32 JSON
 // ==========================================================
 
+ArrowDirection parseArrowDirection(const char* raw) {
+  if (!raw) return ArrowDirection::NONE;
+  String value(raw); value.trim(); value.toUpperCase();
+  if (value == "LEFT" || value == "L") return ArrowDirection::LEFT;
+  if (value == "RIGHT" || value == "R") return ArrowDirection::RIGHT;
+  return ArrowDirection::NONE;
+}
+
+uint32_t manualAlarmRemainingMs() {
+  if (!manualAlarm) return 0;
+  const uint32_t elapsed = millis() - manualAlarmStartMs;
+  return elapsed >= MANUAL_ALARM_DURATION_MS ? 0 : MANUAL_ALARM_DURATION_MS - elapsed;
+}
+
+void updateManualAlarmButton() {
+  const bool reading = digitalRead(MANUAL_ALARM_SW_PIN);
+  if (reading != lastButtonReading) {
+    lastButtonChangeMs = millis();
+    lastButtonReading = reading;
+  }
+  if (millis() - lastButtonChangeMs >= BUTTON_DEBOUNCE_MS && reading != stableButtonState) {
+    stableButtonState = reading;
+    if (stableButtonState == LOW) {
+      manualAlarm = true;
+      manualAlarmStartMs = millis();
+      Serial.println("[MANUAL] PS2 button alarm started");
+    }
+  }
+  if (manualAlarm && millis() - manualAlarmStartMs >= MANUAL_ALARM_DURATION_MS) {
+    manualAlarm = false;
+    Serial.println("[MANUAL] alarm finished");
+  }
+}
+
+void showManualAlarm() {
+  const bool visible = ((millis() / MANUAL_ALARM_RGB_BLINK_MS) % 2UL) == 0UL;
+  setLeft(false, false, visible);
+  setRight(false, false, visible);
+}
+
+constexpr uint8_t MAX7219_REG_DIGIT0 = 0x01;
+constexpr uint8_t MAX7219_REG_DECODEMODE = 0x09;
+constexpr uint8_t MAX7219_REG_INTENSITY = 0x0A;
+constexpr uint8_t MAX7219_REG_SCANLIMIT = 0x0B;
+constexpr uint8_t MAX7219_REG_SHUTDOWN = 0x0C;
+constexpr uint8_t MAX7219_REG_DISPLAYTEST = 0x0F;
+
+void max7219WriteAll(uint8_t reg, uint8_t value) {
+  digitalWrite(MAX7219_CS_PIN, LOW);
+  for (uint8_t device = 0; device < MAX7219_DEVICE_COUNT; ++device) {
+    shiftOut(MAX7219_DIN_PIN, MAX7219_CLK_PIN, MSBFIRST, reg);
+    shiftOut(MAX7219_DIN_PIN, MAX7219_CLK_PIN, MSBFIRST, value);
+  }
+  digitalWrite(MAX7219_CS_PIN, HIGH);
+}
+
+void clearMatrices() {
+  for (uint8_t row = 0; row < 8; ++row) max7219WriteAll(MAX7219_REG_DIGIT0 + row, 0x00);
+}
+
+void drawArrowOnBoth(const byte pattern[8]) {
+  for (uint8_t row = 0; row < 8; ++row) max7219WriteAll(MAX7219_REG_DIGIT0 + row, pattern[row]);
+}
+
+void initMatrices() {
+  pinMode(MAX7219_DIN_PIN, OUTPUT);
+  pinMode(MAX7219_CLK_PIN, OUTPUT);
+  pinMode(MAX7219_CS_PIN, OUTPUT);
+  digitalWrite(MAX7219_CS_PIN, HIGH);
+  max7219WriteAll(MAX7219_REG_DECODEMODE, 0x00);
+  max7219WriteAll(MAX7219_REG_SCANLIMIT, 0x07);
+  max7219WriteAll(MAX7219_REG_INTENSITY, MAX7219_INTENSITY);
+  max7219WriteAll(MAX7219_REG_DISPLAYTEST, 0x00);
+  max7219WriteAll(MAX7219_REG_SHUTDOWN, 0x01);
+  clearMatrices();
+}
+
+
+// ==========================================================
+
 bool parseVisionJson(
   const String& line,
   const char* source
@@ -501,43 +628,28 @@ bool parseVisionJson(
     doc["vision_risk"] | "NORMAL";
 
 
-  // 如果没有左右独立风险，
-  // 两侧都使用 vision_risk
+  // 新字段指定“左/右出口”风险；保留旧字段兼容现有 JSON。
+  const char* leftRisk = !doc["left_exit_risk"].isNull()
+    ? (doc["left_exit_risk"] | globalRisk)
+    : (doc["left_risk"] | globalRisk);
+  const char* rightRisk = !doc["right_exit_risk"].isNull()
+    ? (doc["right_exit_risk"] | globalRisk)
+    : (doc["right_risk"] | globalRisk);
 
-  const char* leftRisk =
-    doc["left_risk"] | globalRisk;
+  vision.left = parseState(leftRisk);
+  vision.right = parseState(rightRisk);
 
-  const char* rightRisk =
-    doc["right_risk"] | globalRisk;
-
-
-  vision.left =
-    parseState(leftRisk);
-
-  vision.right =
-    parseState(rightRisk);
-
-
-  // ---------- 人数 ----------
-
-  if (
-    !doc["left_count"].isNull()
-  ) {
-
-    vision.leftCount =
-      doc["left_count"].as<int>();
+  // 双出口人数新字段优先，旧字段继续兼容。
+  if (!doc["left_exit_count"].isNull()) {
+    vision.leftCount = doc["left_exit_count"].as<int>();
+  } else if (!doc["left_count"].isNull()) {
+    vision.leftCount = doc["left_count"].as<int>();
   }
-
-
-  if (
-    !doc["right_count"].isNull()
-  ) {
-
-    vision.rightCount =
-      doc["right_count"].as<int>();
+  if (!doc["right_exit_count"].isNull()) {
+    vision.rightCount = doc["right_exit_count"].as<int>();
+  } else if (!doc["right_count"].isNull()) {
+    vision.rightCount = doc["right_count"].as<int>();
   }
-
-
   if (
     !doc["total_people"].isNull()
   ) {
@@ -615,6 +727,10 @@ bool parseVisionJson(
   vision.fireConfirmed =
     doc["fire_confirmed"]
     | false;
+  vision.recommendedDirectionProvided = !doc["recommended_direction"].isNull();
+  vision.recommendedDirection = vision.recommendedDirectionProvided
+    ? parseArrowDirection(doc["recommended_direction"] | "NONE")
+    : ArrowDirection::NONE;
 
 
   // ---------- UART 在线 ----------
@@ -1121,6 +1237,7 @@ void evaluateRisk() {
 
 BuzzerMode wantedBuzzerMode() {
   if (fireEmergency) return BuzzerMode::FIRE;
+  if (manualAlarm) return BuzzerMode::MANUAL_ALARM;
   if (communicationOffline) return BuzzerMode::SILENT;
 
   // Any formal warning, crowd, danger, or fire buzzer takes priority.
@@ -1154,11 +1271,47 @@ void updateBuzzer() {
     case BuzzerMode::WARNING: on = (elapsed % 2200UL) < 180UL; break;
     case BuzzerMode::CROWD: on = (elapsed % 300UL) < 150UL; break;
     case BuzzerMode::RUNNING: on = (elapsed % 2000UL) < 80UL; break;
+    case BuzzerMode::MANUAL_ALARM: on = (elapsed % (MANUAL_ALARM_BUZZER_HALF_PERIOD_MS * 2UL)) < MANUAL_ALARM_BUZZER_HALF_PERIOD_MS; break;
     case BuzzerMode::FIRE: on = true; break;
   }
   buzzerWrite(on);
 }
 
+// ==========================================================
+// 25. MAX7219 左右分流箭头
+// ==========================================================
+
+ArrowDirection wantedArrowDirection() {
+  // 火情和人工报警期间不显示单侧引导，避免给出错误疏散含义。
+  if (fireEmergency || manualAlarm) return ArrowDirection::NONE;
+  if (piOnline() && vision.recommendedDirectionProvided) return vision.recommendedDirection;
+
+  const bool leftCrowded = stateRank(finalLeft) >= stateRank(RouteState::CROWD);
+  const bool rightCrowded = stateRank(finalRight) >= stateRank(RouteState::CROWD);
+  if (leftCrowded && !rightCrowded) return ArrowDirection::RIGHT;
+  if (rightCrowded && !leftCrowded) return ArrowDirection::LEFT;
+  return ArrowDirection::NONE;
+}
+
+const char* arrowText(ArrowDirection direction) {
+  switch (direction) {
+    case ArrowDirection::LEFT: return "LEFT";
+    case ArrowDirection::RIGHT: return "RIGHT";
+    case ArrowDirection::NONE: return "NONE";
+  }
+  return "NONE";
+}
+
+void updateMatrices() {
+  const ArrowDirection wanted = wantedArrowDirection();
+  if (wanted == currentArrowDirection) return;
+  currentArrowDirection = wanted;
+  if (wanted == ArrowDirection::LEFT) drawArrowOnBoth(ARROW_LEFT);
+  else if (wanted == ArrowDirection::RIGHT) drawArrowOnBoth(ARROW_RIGHT);
+  else clearMatrices();
+  Serial.print("[MATRIX] direction=");
+  Serial.println(arrowText(currentArrowDirection));
+}
 
 // ==========================================================
 // 25. 状态输出 + ESP32 -> Raspberry Pi
@@ -1468,6 +1621,15 @@ void printAndSendStatus() {
 
   reply["vision_valid"] =
     piOnline();
+  reply["left_exit_state"] = stateText(finalLeft);
+  reply["right_exit_state"] = stateText(finalRight);
+  reply["left_exit_count"] = vision.leftCount;
+  reply["right_exit_count"] = vision.rightCount;
+  reply["arrow_direction"] = arrowText(currentArrowDirection);
+  reply["manual_alarm"] = manualAlarm;
+  reply["manual_alarm_remaining_ms"] = manualAlarmRemainingMs();
+  reply["manual_alarm_source"] = "PS2_BUTTON";
+  reply["recommended_direction"] = arrowText(currentArrowDirection);
 
 
   // 可以额外回传湿度
@@ -1552,9 +1714,14 @@ void setup() {
     OUTPUT
   );
 
+  // ---------- PS2 摇杆 SW ----------
+
+  pinMode(MANUAL_ALARM_SW_PIN, INPUT_PULLUP);
+  lastButtonReading = digitalRead(MANUAL_ALARM_SW_PIN);
+  stableButtonState = lastButtonReading;
+
 
   // ---------- MQ-2 ----------
-
   pinMode(
     MQ2_PIN,
     INPUT
@@ -1599,6 +1766,10 @@ void setup() {
     PI_RX_PIN,
     PI_TX_PIN
   );
+
+  // ---------- MAX7219 x2 ----------
+
+  initMatrices();
 
 
   piBuffer.reserve(
@@ -1699,6 +1870,9 @@ void loop() {
     usbBuffer,
     "USB_TEST"
   );
+  // ---------- PS2 摇杆人工报警 ----------
+
+  updateManualAlarmButton();
 
 
   // ======================================================
@@ -1719,7 +1893,7 @@ void loop() {
   // RGB
   //
   // 优先级：
-  // FIRE > COMM_TIMEOUT > 普通风险
+  // FIRE > 人工报警 > COMM_TIMEOUT > 普通风险
   // ======================================================
 
   if (
@@ -1734,6 +1908,11 @@ void loop() {
       RouteState::FIRE
     );
 
+  } else if (
+    manualAlarm
+  ) {
+
+    showManualAlarm();
   } else if (
     communicationOffline
   ) {
@@ -1757,6 +1936,9 @@ void loop() {
   // ======================================================
 
   updateBuzzer();
+  // ---------- MAX7219 双出口分流 ----------
+
+  updateMatrices();
 
 
   // ======================================================

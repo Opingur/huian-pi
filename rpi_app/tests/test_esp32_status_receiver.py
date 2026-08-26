@@ -67,6 +67,21 @@ class Esp32StatusReceiverTests(unittest.TestCase):
         fake_temperature = status_payload(temperature_c=0.0, temperature_valid=False, temperature_warning=False)
         self.assertIsNone(parse_esp32_status_message(json.dumps(fake_temperature)))
 
+    def test_optional_web_status_fields_are_preserved_without_changing_uart_schema(self):
+        parsed = parse_esp32_status_message(json.dumps(status_payload(
+            mq2_phase="READY", mq2_baseline=587, humidity_percent=57.2,
+            manual_alarm=True, manual_alarm_remaining_ms=18000,
+            manual_alarm_source="button", recommended_direction="LEFT",
+            left_exit_state="CROWD", right_exit_state="NORMAL", arrow_direction="RIGHT",
+            unknown_future_field={"not": "a scalar"},
+        )))
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.extras["mq2_phase"], "READY")
+        self.assertEqual(parsed.extras["mq2_baseline"], 587)
+        self.assertTrue(parsed.extras["manual_alarm"])
+        self.assertEqual(parsed.extras["arrow_direction"], "RIGHT")
+        self.assertNotIn("unknown_future_field", parsed.extras)
+
     def test_bad_or_wrong_direction_json_is_ignored(self):
         self.assertIsNone(parse_esp32_status_message("not-json"))
         self.assertIsNone(parse_esp32_status_message(json.dumps(status_payload(message_type="vision_status"))))

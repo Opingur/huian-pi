@@ -1,0 +1,8 @@
+# Competition presentation videos are copied to this directory on the Raspberry Pi.
+# Do not commit large media files to the source repository.
+*.mp4
+*.m4v
+*.mov
+*.webm
+!.gitignore
+!README.md

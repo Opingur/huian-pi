@@ -12,23 +12,46 @@ from teaching_console.services.research_store import ResearchStore
 HORIZONS = (10, 20, 30)
 
 
+def prediction_horizons(video_duration_seconds: float) -> tuple[int, int, int]:
+    """Choose three child-friendly validation moments without changing the predictor."""
+    if video_duration_seconds >= 30:
+        return HORIZONS
+    if video_duration_seconds >= 15:
+        return (5, 10, 15)
+    maximum = max(3, min(14, int(video_duration_seconds * 0.75)))
+    middle = max(2, min(maximum - 1, round(maximum * 2 / 3)))
+    return (1, middle, maximum)
+
+
+def annotation_horizons(annotation) -> tuple[int, int, int]:
+    """Read adaptive horizons; old SQLite rows remain the original +10/+20/+30."""
+    try:
+        values = tuple(int(value) for value in json.loads(annotation["prediction_horizons"]))
+        if len(values) == 3 and all(left < right for left, right in zip(values, values[1:])):
+            return values
+    except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return HORIZONS
+
+
 class ResearchPredictionService:
     def __init__(self, store: ResearchStore) -> None:
         self.store = store
 
     @staticmethod
-    def _valid(item: dict, duration: float) -> bool:
+    def _valid(item: dict, duration: float, horizons: tuple[int, int, int]) -> bool:
         return (
             item.get("prediction_slope") is not None
             and all(item.get(f"prediction_{horizon}") is not None for horizon in HORIZONS)
-            and float(item["time_seconds"]) + 30 <= duration
+            and float(item["time_seconds"]) + max(horizons) <= duration
         )
 
     def generate_anchors(self, experiment_id: str, timeline: list[dict], video_duration_seconds: float, target_anchor_count: int = 5) -> list:
         existing = self.store.prediction_annotations(experiment_id)
         if existing:
             return existing
-        valid = [item for item in timeline if self._valid(item, video_duration_seconds)]
+        horizons = prediction_horizons(video_duration_seconds)
+        valid = [item for item in timeline if self._valid(item, video_duration_seconds, horizons)]
         count = min(max(0, target_anchor_count), 5, len(valid))
         if count == 1:
             selected = [valid[len(valid) // 2]]
@@ -40,6 +63,7 @@ class ResearchPredictionService:
             self.store.create_prediction_annotation(
                 experiment_id, item["time_seconds"], item["frame_index"], item["current_system_count"],
                 item["prediction_slope"], item["prediction_10"], item["prediction_20"], item["prediction_30"],
+                prediction_horizons=horizons,
             )
         return self.store.prediction_annotations(experiment_id)
 
@@ -56,13 +80,13 @@ class ResearchPredictionService:
             return None
         return int(min(matches, key=lambda row: abs(row["video_time_seconds"] - target_time_seconds))["ground_truth_count"])
 
-    def apply_existing_count_gt(self, prediction_annotation_id: str, horizon_seconds: int) -> int | None:
+    def apply_existing_count_gt(self, prediction_annotation_id: str, horizon_seconds: int, target_horizon_seconds: int | None = None) -> int | None:
         with self.store._connection() as connection:
             connection.row_factory = __import__("sqlite3").Row
             prediction = connection.execute("SELECT experiment_id, anchor_time_seconds FROM prediction_annotations WHERE id = ?", (prediction_annotation_id,)).fetchone()
         if prediction is None:
             raise KeyError(prediction_annotation_id)
-        count = self.find_existing_count_ground_truth(prediction["experiment_id"], prediction["anchor_time_seconds"] + horizon_seconds)
+        count = self.find_existing_count_ground_truth(prediction["experiment_id"], prediction["anchor_time_seconds"] + (target_horizon_seconds or horizon_seconds))
         if count is not None:
             self.save_prediction_gt(prediction_annotation_id, horizon_seconds, count)
         return count

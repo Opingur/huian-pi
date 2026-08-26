@@ -7,7 +7,7 @@ from urllib.error import URLError
 from teaching_console.pages.demo_showcase_page import demo_state_text
 from teaching_console.services.teacher_remote_service import (
     DEFAULT_PI_URL, TeacherRemoteClient, TeacherRemoteError, TeacherRemoteSettings, TeacherRemoteSettingsStore,
-    demo_case_row, direct_urlopen, live_status_rows, normalize_base_url,
+    demo_case_row, direct_urlopen, live_status_rows, normalize_base_url, showcase_status_text,
 )
 
 
@@ -22,6 +22,7 @@ class TeacherRemoteClientTests(unittest.TestCase):
     def test_default_and_persisted_address(self):
         self.assertEqual(normalize_base_url(""), DEFAULT_PI_URL)
         self.assertEqual(normalize_base_url("192.168.1.8:8765/"), "http://192.168.1.8:8765")
+        self.assertEqual(normalize_base_url("http://192.168.124.112:8780/display"), "http://192.168.124.112:8780")
         with tempfile.TemporaryDirectory() as directory:
             store = TeacherRemoteSettingsStore(Path(directory))
             store.save(TeacherRemoteSettings("100.70.1.2:8765"))
@@ -55,6 +56,8 @@ class TeacherRemoteClientTests(unittest.TestCase):
         self.assertEqual(rows["ESP32"], "在线")
         self.assertEqual(demo_case_row({"case_id": "000327", "title": "示例", "duration": 39.7}), ("000327", "示例", "39.7 s"))
         self.assertIn("000327", demo_state_text({"state": "paused", "case_id": "000327", "position_seconds": 2}))
+        self.assertEqual(showcase_status_text(None), "树莓派：等待连接")
+        self.assertEqual(showcase_status_text({"camera_online": True, "esp32_online": True}), "树莓派在线 · ESP32在线")
 
 
 if __name__ == "__main__": unittest.main()

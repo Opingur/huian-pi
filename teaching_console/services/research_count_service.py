@@ -65,6 +65,7 @@ class ResearchCountService:
         annotation_id = self.store.create_count_annotation(
             experiment_id, len(items) + 1, time_seconds, int(round(time_seconds * fps)), system_count, note
         )
+        self.store.log_activity(experiment_id, "add_key_sample", f"添加第 {float(time_seconds):.1f} 秒关键样本")
         return annotation_id
 
     def metrics(self, experiment_id: str) -> dict[str, int | float | None]:

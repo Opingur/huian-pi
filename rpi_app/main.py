@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -18,7 +19,10 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 from communication.esp32 import ESP32Publisher
+from communication.pi_bridge import PiBridgePublisher
+from communication.remote_vision import RemoteVisionServer, SourceArbitratingPublisher
 from decision.crowd_index import calculate_crowd_index
+from decision.evacuation_guidance import exit_guidance
 from decision.crowd_predictor import CrowdPredictor
 from decision.risk_engine import RiskEngine
 from ui.display import draw_dashboard
@@ -35,7 +39,7 @@ def build_status(config: dict[str, Any], trend: FlowTrend, vision_risk: str, cro
     """Build the rich internal vision status; UART selects its compact subset."""
     predicted_people = forecast["predicted_people"]
     predicted_risk = forecast["predicted_risk"]
-    return {
+    status = {
         "protocol_version": 1, "device": config["device"], "vision_risk": vision_risk,
         "crowd_index": crowd_metrics["index"], "density_score": crowd_metrics["density_score"],
         "growth_score": crowd_metrics["growth_score"], "conflict_score": crowd_metrics["conflict_score"],
@@ -50,6 +54,8 @@ def build_status(config: dict[str, Any], trend: FlowTrend, vision_risk: str, cro
         "danger_people_threshold": forecast["danger_people_threshold"],
         "timestamp": int(time.time()),
     }
+    status.update(exit_guidance(trend.left_people, trend.right_people, config.get("evacuation_guidance")))
+    return status
 
 
 def analyse_frame(frame, detector: PersonDetector, flow_analyzer: PeopleFlowAnalyzer, risk_engine: RiskEngine, predictor: CrowdPredictor, config: dict[str, Any]) -> tuple[list[dict[str, float | int | str]], dict[str, object], bool]:
@@ -83,7 +89,7 @@ def _write_image(output_path: Path, image) -> bool:
     return bool(success)
 
 
-def run_image(config: dict[str, Any], source_path: Path, output_dir: Path) -> None:
+def run_image(config: dict[str, Any], source_path: Path, output_dir: Path, *, publisher: Any | None = None) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     frame = cv2.imread(str(source_path))
     if frame is None:
@@ -93,11 +99,13 @@ def run_image(config: dict[str, Any], source_path: Path, output_dir: Path) -> No
     fire_detector = FireDetector(config.get("fire_detection", {}))
     fire_result = fire_detector.detect(frame)
     status.update(single_image_fire_status(fire_result, fire_detector.enabled))
-    publisher = ESP32Publisher(config.get("esp32"), legacy_dry_run=bool(config.get("esp32_dry_run", True)))
+    own_publisher = publisher is None
+    publisher = publisher or ESP32Publisher(config.get("esp32"), legacy_dry_run=bool(config.get("esp32_dry_run", True)))
     try:
         publisher.send_status(status)
     finally:
-        publisher.close()
+        if own_publisher:
+            publisher.close()
     output_path = output_dir / f"{source_path.stem}_annotated.jpg"
     annotated = draw_dashboard(frame, detections, status, display=config.get("display", {}), ui_context={
         "fire_detections": fire_result["detections"],
@@ -112,22 +120,49 @@ def run_image(config: dict[str, Any], source_path: Path, output_dir: Path) -> No
         cv2.destroyAllWindows()
 
 
-def _run_config(config: dict[str, Any]) -> None:
+def _run_config(config: dict[str, Any], *, publisher: Any | None = None) -> None:
     source_type = str(config["source_type"]).lower()
     output_dir = resolve_app_path(config.get("output_dir", "../output"))
     output_dir.mkdir(parents=True, exist_ok=True)
-    if source_type == "camera":
-        run_picamera2_camera(config, output_dir, build_status)
-        return
-    if source_type not in {"image", "video"}:
-        raise ValueError("source_type must be image, video, or camera")
-    source_path = resolve_app_path(config["source"])
-    _ensure_input(source_path, source_type)
-    if source_type == "image":
-        run_image(config, source_path, output_dir)
-    else:
-        run_tracked_video(config, source_path, output_dir, build_status)
-
+    remote_server = None
+    controlled_publisher = publisher
+    remote_config = dict(config.get("remote_vision", {}))
+    if publisher is None and bool(remote_config.get("enabled", False)):
+        key_env = str(remote_config.get("key_env", "HUIAN_REMOTE_VISION_KEY"))
+        bridge_key = os.environ.get(key_env, "")
+        if not bridge_key:
+            raise RuntimeError(f"remote_vision is enabled but environment variable {key_env} is not set")
+        uart = ESP32Publisher(config.get("esp32"), legacy_dry_run=bool(config.get("esp32_dry_run", True)))
+        controlled_publisher = SourceArbitratingPublisher(
+            uart, remote_lease_seconds=float(remote_config.get("lease_seconds", 4.0)),
+        )
+        remote_server = RemoteVisionServer(
+            controlled_publisher, bridge_key,
+            host=str(remote_config.get("host", "0.0.0.0")), port=int(remote_config.get("port", 8781)),
+        )
+        remote_server.start()
+        print(
+            f"Remote Windows vision input listening on http://{remote_config.get('host', '0.0.0.0')}:{remote_config.get('port', 8781)}/api/vision",
+            flush=True,
+        )
+    try:
+        if source_type == "camera":
+            run_picamera2_camera(config, output_dir, build_status, publisher=controlled_publisher)
+            return
+        if source_type not in {"image", "video"}:
+            raise ValueError("source_type must be image, video, or camera")
+        source_path = resolve_app_path(config["source"])
+        _ensure_input(source_path, source_type)
+        if source_type == "image":
+            run_image(config, source_path, output_dir, publisher=controlled_publisher)
+        else:
+            run_tracked_video(config, source_path, output_dir, build_status, publisher=controlled_publisher)
+    finally:
+        if remote_server is not None:
+            remote_server.stop()
+        shutdown = getattr(controlled_publisher, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
 
 def cli_main() -> None:
     parser = argparse.ArgumentParser(description="Huian Loudao visual safety system")
@@ -135,6 +170,9 @@ def cli_main() -> None:
     parser.add_argument("--source", default=None, help="override image or video source")
     parser.add_argument("--source-type", choices=["image", "video", "camera"], default=None)
     parser.add_argument("--no-display", action="store_true", help="disable OpenCV window")
+    parser.add_argument("--output-dir", default=None, help="override output directory")
+    parser.add_argument("--pi-bridge-url", default=None, help="Pi main-process /api/vision endpoint for remote ESP32 control")
+    parser.add_argument("--pi-bridge-key", default=None, help="shared key required by the Pi vision bridge")
     args = parser.parse_args()
     config = load_config(args.config) if args.config else load_config()
     if args.source is not None:
@@ -143,7 +181,17 @@ def cli_main() -> None:
         config["source_type"] = args.source_type
     if args.no_display:
         config["display_window"] = False
-    _run_config(config)
+    if args.output_dir is not None:
+        config["output_dir"] = args.output_dir
+    publisher = None
+    if args.pi_bridge_url is not None:
+        if str(config.get("source_type", "")).lower() != "video":
+            raise ValueError("--pi-bridge-url is limited to offline video runs; use --source-type video")
+        publisher = PiBridgePublisher(
+            args.pi_bridge_url, args.pi_bridge_key or "",
+            send_interval_seconds=float(config.get("esp32", {}).get("send_interval_seconds", 1.0)),
+        )
+    _run_config(config, publisher=publisher)
 
 
 def main() -> None:

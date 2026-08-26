@@ -94,6 +94,15 @@ class FireDetectorTests(unittest.TestCase):
         tracker.record(evidence_result(True), 2.0)
         self.assertTrue(tracker.status(2.0)["vision_fire_suspected"])
 
+    def test_three_consecutive_hits_confirm_fire_but_one_or_two_do_not(self):
+        tracker = FireEvidenceTracker({"confirmation_hits": 3, "confirmation_window": 3}, True)
+        tracker.record(evidence_result(True), 0.0)
+        self.assertFalse(tracker.status(0.0)["fire_confirmed"])
+        tracker.record(evidence_result(True), 1.0)
+        self.assertFalse(tracker.status(1.0)["fire_confirmed"])
+        tracker.record(evidence_result(True), 2.0)
+        self.assertTrue(tracker.status(2.0)["vision_fire_suspected"])
+        self.assertTrue(tracker.status(2.0)["fire_confirmed"])
     def test_bbox_hold_and_visual_alert_hold_are_separate(self):
         tracker = FireEvidenceTracker({"confirmation_hits": 2, "confirmation_window": 5, "bbox_hold_seconds": 3.0, "visual_alert_hold_seconds": 6.0}, True)
         tracker.record(evidence_result(True), 0.0)

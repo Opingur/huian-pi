@@ -46,6 +46,7 @@ def run_picamera2_camera(
     config: dict[str, Any],
     output_dir: Path,
     build_status: Callable[..., dict[str, object]],
+    publisher: Any | None = None,
 ) -> None:
     """Show Splash first, then feed the formal live-processing chain from PicameraSource."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -59,7 +60,10 @@ def run_picamera2_camera(
         startup.show("正在连接摄像头…")
         source.start()
         startup.show("正在启动视觉系统…")
-        processor = TrackedFrameProcessor(config, build_status)
+        processor = (
+            TrackedFrameProcessor(config, build_status)
+            if publisher is None else TrackedFrameProcessor(config, build_status, publisher=publisher)
+        )
         startup.show("实时监测启动…")
         live = config.get("live_processing", {})
         perf_interval = float(live.get("performance_log_interval_seconds", 2.0))

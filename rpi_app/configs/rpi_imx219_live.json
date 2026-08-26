@@ -40,6 +40,7 @@
   },
   "tracking": {
     "tracker": "bytetrack.yaml",
+    "imgsz": 448,
     "trajectory_seconds": 2.0,
     "min_track_age_seconds": 0.8,
     "min_motion_distance_norm": 0.015
@@ -95,8 +96,8 @@
     "model_path": "../models/fire_n.pt",
     "imgsz": 640,
     "confidence": 0.18,
-    "interval_seconds": 1,
-    "tiled_inference": true,
+    "interval_seconds": 2.5,
+    "tiled_inference": false,
     "tile_rows": 2,
     "tile_cols": 2,
     "tile_overlap": 0.15,
@@ -106,13 +107,33 @@
     "release_hold_seconds": 2.0
   },
   "live_processing": {
-    "person_interval_seconds": 0.25,
+    "person_interval_seconds": 0.05,
     "performance_log_enabled": true,
     "performance_log_interval_seconds": 2
   },
   "teacher_runtime": {
     "enabled": true,
     "interval_seconds": 0.25
+  },
+  "running_detection": {
+    "window_seconds": 0.7,
+    "enter_threshold": 1.0,
+    "exit_threshold": 0.55,
+    "confirm_seconds": 0.2,
+    "release_seconds": 0.5,
+    "minimum_track_history": 0.35,
+    "max_sample_speed": 5.0,
+    "max_sample_gap_seconds": 0.85,
+    "max_scale_change_ratio": 1.45,
+    "pixel_enter_threshold": 180.0,
+    "pixel_exit_threshold": 120.0
+  },
+  "remote_vision": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 8781,
+    "key_env": "HUIAN_REMOTE_VISION_KEY",
+    "lease_seconds": 4.0
   },
   "crowd_calibration": {
     "calibrated": false,

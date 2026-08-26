@@ -5,6 +5,7 @@ from teaching_console.pages.research_page import (
     format_prediction_mae,
     format_prediction_slope,
     format_prediction_value,
+    preview_prediction_error,
 )
 
 
@@ -16,6 +17,11 @@ class PredictionDisplayFormatTests(unittest.TestCase):
         self.assertEqual(format_prediction_mae(0.9499999999999993), "0.95")
         self.assertEqual(format_prediction_mae(7.300000000000001), "7.30")
 
+    def test_ai_value_and_entered_count_preview_error(self):
+        self.assertEqual(format_prediction_value(17.700000000000001), "17.7")
+        self.assertEqual(preview_prediction_error(17.7, "18"), "误差：0.3 人（保存后记录）")
+        self.assertEqual(preview_prediction_error(17.7, ""), "误差：自动计算")
+        self.assertEqual(preview_prediction_error(None, "18"), "误差：自动计算")
     def test_missing_values_are_explicit(self):
         for formatter in (
             format_prediction_slope,

@@ -122,7 +122,7 @@ def _summary(status: Mapping[str, object], context: Mapping[str, object] | None 
     context = context or {}
     stage = _fire_stage(status, context)
     if stage == "fused":
-        return "综合状态：火情警报", _PURPLE
+        return "综合状态：火情报警", _RED
     if stage == "stable":
         return "综合状态：视觉火情预警（待多源确认）", _ORANGE
     if stage == "recent":
@@ -139,7 +139,7 @@ def _summary(status: Mapping[str, object], context: Mapping[str, object] | None 
 def _top_fire_text(status: Mapping[str, object], context: Mapping[str, object]) -> tuple[str, tuple[int, int, int]]:
     stage = _fire_stage(status, context)
     if stage == "fused":
-        return "视觉火情：多源确认", _PURPLE
+        return "视觉火情：确认火情", _RED
     if stage == "stable":
         return "视觉火情：已发现火焰", _ORANGE
     if stage == "recent":
@@ -260,6 +260,7 @@ def _crowd_state(status: Mapping[str, object]) -> tuple[str, tuple[int, int, int
 
 
 def _draw_flow_card(canvas, status, entries: list) -> None:
+    """Show six live metrics in four calm rows, safely above the status bar."""
     _panel(canvas, FLOW_X, INFO_Y, FLOW_WIDTH, INFO_HEIGHT)
     entries.append(((FLOW_X + 16, INFO_Y + 14), "人流监测", _TEXT, 19))
     crowd_text, crowd_color = _crowd_state(status)
@@ -267,19 +268,24 @@ def _draw_flow_card(canvas, status, entries: list) -> None:
     event_text = "检测到跑动" if bool(status.get("running_event")) else "正常通行"
     event_color = _RED if running_count else crowd_color
     rows = (
-        ("当前人数", f"{_int(status.get('total_people'))} 人", _BLUE),
-        ("跟踪人数", f"{_int(status.get('tracked_people', status.get('total_people')))} 人", _BLUE),
-        ("运动人数", f"{_int(status.get('moving_people'))} 人", _BLUE),
-        ("跑动人数", f"{running_count} 人", _RED if running_count else _GREEN),
-        ("拥挤指数", f"{_number(status.get('crowd_index')):.2f}", _TEXT),
-        ("当前事件", event_text, event_color),
+        (("当前人数", f"{_int(status.get('total_people'))} 人", _BLUE),
+         ("跟踪人数", f"{_int(status.get('tracked_people', status.get('total_people')))} 人", _BLUE)),
+        (("运动人数", f"{_int(status.get('moving_people'))} 人", _BLUE),
+         ("跑动人数", f"{running_count} 人", _RED if running_count else _GREEN)),
+        (("拥挤指数", f"{_number(status.get('crowd_index')):.2f}", _TEXT),
+         ("人流状态", crowd_text, crowd_color)),
+        (("当前事件", event_text, event_color), None),
     )
-    for index, (label, value, color) in enumerate(rows):
-        y = INFO_Y + 48 + index * 28
+    for index, (left, right) in enumerate(rows):
+        y = INFO_Y + 48 + index * 33
         if index:
-            cv2.line(canvas, (FLOW_X + 14, y - 8), (FLOW_X + FLOW_WIDTH - 14, y - 8), (61, 73, 87), 1)
-        entries.append(((FLOW_X + 16, y), label, _MUTED, 14))
-        entries.append(((FLOW_X + 146, y), value, color, 15))
+            cv2.line(canvas, (FLOW_X + 14, y - 9), (FLOW_X + FLOW_WIDTH - 14, y - 9), (61, 73, 87), 1)
+        for column_x, item in ((FLOW_X + 16, left), (FLOW_X + 184, right)):
+            if item is None:
+                continue
+            label, value, color = item
+            entries.append(((column_x, y), label, _MUTED, 13))
+            entries.append(((column_x + 72, y), value, color, 14))
 
 
 def _environment_rows(status: Mapping[str, object], context: Mapping[str, object]) -> list[tuple[str, str, tuple[int, int, int]]]:
@@ -287,18 +293,18 @@ def _environment_rows(status: Mapping[str, object], context: Mapping[str, object
     stale = bool(context.get("esp32_status_stale", True))
     configured = bool(context.get("esp32_configured", False))
     stage = _fire_stage(status, context)
-    fire_value = "\u5df2\u53d1\u73b0" if stage in {"stable", "fused"} else "\u6301\u7eed\u89c2\u5bdf" if stage == "recent" else "\u7591\u4f3c" if stage == "candidate" else "\u672a\u53d1\u73b0"
-    fire_color = _PURPLE if stage == "fused" else _ORANGE if stage in {"stable", "recent"} else _YELLOW if stage == "candidate" else _GREEN
+    fire_value = "\u786e\u8ba4\u706b\u60c5" if stage == "fused" else "\u5df2\u53d1\u73b0" if stage == "stable" else "\u6301\u7eed\u89c2\u5bdf" if stage == "recent" else "\u7591\u4f3c" if stage == "candidate" else "\u672a\u53d1\u73b0"
+    fire_color = _RED if stage == "fused" else _ORANGE if stage in {"stable", "recent"} else _YELLOW if stage == "candidate" else _GREEN
 
     if esp32 is None:
         missing = "\u6682\u672a\u8fde\u63a5" if configured else "\u672a\u63a5\u5165"
         sensor_rows = [("MQ-2\u70df\u96fe", missing, _MUTED), ("\u73af\u5883\u6e29\u5ea6", missing, _MUTED)]
         esp32_text, esp32_color = missing, _MUTED
-        multi = "\u7b49\u5f85\u73af\u5883\u4f20\u611f\u5668" if stage in {"stable", "recent", "candidate"} else missing
+        multi = "\u706b\u60c5\u786e\u8ba4" if stage == "fused" else "\u6301\u7eed\u786e\u8ba4\u4e2d" if stage in {"stable", "recent", "candidate"} else "\u6b63\u5e38\u76d1\u6d4b"
     elif stale:
         sensor_rows = [("MQ-2\u70df\u96fe", "\u6682\u65e0\u6570\u636e", _MUTED), ("\u73af\u5883\u6e29\u5ea6", "\u6682\u65e0\u6570\u636e", _MUTED)]
         esp32_text, esp32_color = "\u901a\u4fe1\u8d85\u65f6", _MUTED
-        multi = "\u7b49\u5f85\u73af\u5883\u4f20\u611f\u5668"
+        multi = "\u706b\u60c5\u786e\u8ba4" if stage == "fused" else "\u6301\u7eed\u786e\u8ba4\u4e2d" if stage in {"stable", "recent", "candidate"} else "\u6b63\u5e38\u76d1\u6d4b"
     else:
         mq2_warning = bool(_value(esp32, "mq2_warning", False))
         mq2_value = _value(esp32, "mq2_value")
@@ -317,8 +323,8 @@ def _environment_rows(status: Mapping[str, object], context: Mapping[str, object
         system_state = str(_value(esp32, "system_state", "NORMAL"))
         state_text = "\u6b63\u5e38" if system_state == "NORMAL" else system_state
         esp32_text, esp32_color = f"\u5728\u7ebf / {state_text}", _GREEN
-        multi = "\u591a\u6e90\u786e\u8ba4" if stage == "fused" else "\u7b49\u5f85\u591a\u6e90\u786e\u8ba4" if stage in {"stable", "recent", "candidate"} else "\u6b63\u5e38\u76d1\u6d4b"
-    multi_color = _PURPLE if stage == "fused" else _ORANGE if stage in {"stable", "recent"} else _YELLOW if stage == "candidate" else _GREEN if multi == "\u6b63\u5e38\u76d1\u6d4b" else _MUTED
+        multi = "\u706b\u60c5\u786e\u8ba4" if stage == "fused" else "\u6301\u7eed\u786e\u8ba4\u4e2d" if stage in {"stable", "recent", "candidate"} else "\u6b63\u5e38\u76d1\u6d4b"
+    multi_color = _RED if stage == "fused" else _ORANGE if stage in {"stable", "recent"} else _YELLOW if stage == "candidate" else _GREEN if multi == "\u6b63\u5e38\u76d1\u6d4b" else _MUTED
     return [
         ("\u89c6\u89c9\u706b\u7130", fire_value, fire_color),
         *sensor_rows,

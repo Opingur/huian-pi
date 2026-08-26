@@ -57,6 +57,26 @@ class OptimizationStoreTests(unittest.TestCase):
         finally:
             shutil.rmtree(legacy_root)
 
+    def test_legacy_model_experiment_is_migrated_with_optional_research_link(self) -> None:
+        legacy_root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, legacy_root)
+        database = legacy_root / "validation" / "research_data" / "huian_research.sqlite3"
+        database.parent.mkdir(parents=True)
+        with sqlite3.connect(database) as connection:
+            connection.execute(
+                "CREATE TABLE model_experiments (id TEXT PRIMARY KEY, name TEXT NOT NULL, dataset_name TEXT NOT NULL, "
+                "base_model_path TEXT NOT NULL, epochs INTEGER, imgsz INTEGER, training_package_path TEXT, "
+                "candidate_model_path TEXT, result_metadata_path TEXT, status TEXT NOT NULL, candidate_state TEXT NOT NULL, "
+                "note TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+            )
+            connection.execute(
+                "INSERT INTO model_experiments VALUES ('m', '旧模型实验', 'dataset', 'models/yolov8n.pt', NULL, NULL, NULL, NULL, NULL, 'draft', 'pending', '', 'now', 'now')"
+            )
+        upgraded = ResearchStore(legacy_root)
+        with sqlite3.connect(upgraded.database_path) as connection:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(model_experiments)")}
+        self.assertIn("research_experiment_id", columns)
+        self.assertIsNone(upgraded.get_model_experiment("m")["research_experiment_id"])
     def test_detection_project_frames_and_raw_person_boxes_crud(self) -> None:
         project_id = self.store.create_detection_annotation_project(
             "000327 困难帧", "test_data/000327.mp4", "train", "huian_person_v1"
@@ -105,13 +125,16 @@ class OptimizationStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.validate_detection_dataset_splits("leak_check")
 
+        research_id = self.store.create_experiment("走廊人数研究", "raw.mp4", "teaching", experiment_scene="教学楼走廊")
         experiment_id = self.store.create_model_experiment(
-            "huian_person_v1 微调", "huian_person_v1", "models/yolov8n.pt", epochs=50, imgsz=640
+            "huian_person_v1 微调", "huian_person_v1", "models/yolov8n.pt", research_experiment_id=research_id, epochs=50, imgsz=640
         )
         self.store.set_model_candidate(experiment_id, "models/experiments/huian_person_v1/best.pt", result_metadata_path="result_metadata.json")
         self.store.set_model_candidate_state(experiment_id, "accepted")
         experiment = self.store.get_model_experiment(experiment_id)
         self.assertEqual((experiment["candidate_state"], experiment["candidate_model_path"]), ("accepted", "models/experiments/huian_person_v1/best.pt"))
+        self.assertEqual(experiment["research_experiment_id"], research_id)
+        self.assertEqual(self.store.model_experiments_for_research(research_id)[0]["id"], experiment_id)
 
         deployment_id = self.store.create_model_deployment(
             experiment_id,

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable
 
@@ -18,8 +19,8 @@ class PredictionTimelineAnalysis:
         self.cv2_loader, self.tracker_factory = cv2_loader, tracker_factory
         self.flow_factory, self.predictor_factory = flow_factory, predictor_factory
 
-    def _formal_factories(self):
-        model = (self.root / "rpi_app" / self.config["model_path"]).resolve()
+    def _formal_factories(self, config: dict[str, Any]):
+        model = (self.root / "rpi_app" / config["model_path"]).resolve()
         if not model.is_file():
             raise FileNotFoundError(f"找不到 YOLO 模型：{model}；不会自动下载。")
         sys.path.insert(0, str(self.root / "rpi_app"))
@@ -27,19 +28,21 @@ class PredictionTimelineAnalysis:
         from vision.people_flow import PeopleFlowAnalyzer
         from decision.crowd_predictor import CrowdPredictor
         return (
-            lambda: PersonTracker(model, self.config["confidence"], self.config["tracking"].get("tracker", "bytetrack.yaml")),
-            lambda: PeopleFlowAnalyzer(self.config["flow_window_seconds"], self.config["snapshot_interval_seconds"], self.config["conflict_people_per_region"], self.config["conflict_min_total"]),
-            lambda: CrowdPredictor(self.config["prediction"], self.config.get("crowd_calibration")),
+            lambda: PersonTracker(model, config["confidence"], config["tracking"].get("tracker", "bytetrack.yaml")),
+            lambda: PeopleFlowAnalyzer(config["flow_window_seconds"], config["snapshot_interval_seconds"], config["conflict_people_per_region"], config["conflict_min_total"]),
+            lambda: CrowdPredictor(config["prediction"], config.get("crowd_calibration")),
         )
 
-    def analyze(self, video_path: Path, progress: Callable[[int, int], None] | None = None, cancel_event=None) -> list[dict[str, object]]:
+    def analyze(self, video_path: Path, progress: Callable[[int, int], None] | None = None, cancel_event=None, horizons: tuple[int, int, int] = (10, 20, 30)) -> list[dict[str, object]]:
         if self.cv2_loader is None:
             import cv2
             cv2_module = cv2
         else:
             cv2_module = self.cv2_loader()
         if self.tracker_factory is None or self.flow_factory is None or self.predictor_factory is None:
-            tracker_factory, flow_factory, predictor_factory = self._formal_factories()
+            config = deepcopy(self.config)
+            config.setdefault("prediction", {})["horizons"] = list(horizons)
+            tracker_factory, flow_factory, predictor_factory = self._formal_factories(config)
         else:
             tracker_factory, flow_factory, predictor_factory = self.tracker_factory, self.flow_factory, self.predictor_factory
         capture = cv2_module.VideoCapture(str(video_path))
@@ -65,7 +68,8 @@ class PredictionTimelineAnalysis:
                 if snapshot_saved:
                     forecast = predictor.predict(flow.history, trend.total_people)
                     people = forecast["predicted_people"]
-                    timeline.append({"time_seconds": source_time, "frame_index": frame_index, "current_system_count": trend.total_people, "left_count": left, "right_count": right, "prediction_slope": forecast["prediction_slope"], "prediction_10": people.get(10), "prediction_20": people.get(20), "prediction_30": people.get(30)})
+                    values = [people.get(horizon) for horizon in horizons]
+                    timeline.append({"time_seconds": source_time, "frame_index": frame_index, "current_system_count": trend.total_people, "left_count": left, "right_count": right, "prediction_slope": forecast["prediction_slope"], "prediction_10": values[0], "prediction_20": values[1], "prediction_30": values[2], "prediction_horizons": horizons})
                 frame_index += 1
                 if progress is not None:
                     progress(frame_index, total)

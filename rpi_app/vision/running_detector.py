@@ -34,10 +34,21 @@ class RunningDetector:
         self.release_seconds = float(settings.get("release_seconds", 0.45))
         self.minimum_track_history = float(settings.get("minimum_track_history", 0.5))
         self.max_sample_speed = float(settings.get("max_sample_speed", 5.0))
+        # Keep rapid close-range motion when ByteTrack retained the ID and the
+        # box scale is still plausible; otherwise real running is discarded.
+        self.max_sample_gap_seconds = float(settings.get("max_sample_gap_seconds", 0.85))
+        self.max_scale_change_ratio = float(settings.get("max_scale_change_ratio", 1.45))
+        # Direct pixel speed complements normalised speed for close-range demos.
+        self.pixel_enter_threshold = float(settings.get("pixel_enter_threshold", 220.0))
+        self.pixel_exit_threshold = float(settings.get("pixel_exit_threshold", 160.0))
         if min(self.window_seconds, self.enter_threshold, self.exit_threshold, self.confirm_seconds, self.minimum_track_history) <= 0:
             raise ValueError("running_detection thresholds must be positive")
         if self.exit_threshold >= self.enter_threshold:
             raise ValueError("running_detection.exit_threshold must be lower than enter_threshold")
+        if self.pixel_enter_threshold <= 0 or self.pixel_exit_threshold < 0:
+            raise ValueError("running_detection pixel thresholds must be non-negative and enter must be positive")
+        if self.pixel_exit_threshold >= self.pixel_enter_threshold:
+            raise ValueError("running_detection.pixel_exit_threshold must be lower than pixel_enter_threshold")
         self._tracks: dict[int, _TrackState] = {}
 
     @staticmethod
@@ -53,6 +64,14 @@ class RunningDetector:
             return 0.0
         scale = max(1.0, (first[3] + last[3]) / 2.0)
         return hypot(last[1] - first[1], last[2] - first[2]) / elapsed / scale
+
+    @staticmethod
+    def _pixel_speed(samples: deque[tuple[float, float, float, float]]) -> float:
+        first, last = samples[0], samples[-1]
+        elapsed = last[0] - first[0]
+        if elapsed <= 0:
+            return 0.0
+        return hypot(last[1] - first[1], last[2] - first[2]) / elapsed
 
     def update(self, tracks: list[Mapping[str, object]], source_time: float) -> dict[int, dict[str, object]]:
         """Return local running evidence for each current track.
@@ -73,7 +92,12 @@ class RunningDetector:
                     previous = state.samples[-1]
                     delta_t = sample[0] - previous[0]
                     adjacent_speed = hypot(sample[1] - previous[1], sample[2] - previous[2]) / max(delta_t, 1e-6) / max(1.0, (sample[3] + previous[3]) / 2.0)
-                    if adjacent_speed <= self.max_sample_speed:
+                    height_ratio = max(sample[3], previous[3]) / max(1.0, min(sample[3], previous[3]))
+                    plausible_continuity = (
+                        delta_t <= self.max_sample_gap_seconds
+                        and height_ratio <= self.max_scale_change_ratio
+                    )
+                    if adjacent_speed <= self.max_sample_speed or plausible_continuity:
                         state.samples.append(sample)
                 else:
                     state.samples.append(sample)
@@ -82,13 +106,16 @@ class RunningDetector:
                 state.samples.popleft()
             history_seconds = state.samples[-1][0] - state.samples[0][0] if len(state.samples) > 1 else 0.0
             speed = self._speed(state.samples) if history_seconds >= self.minimum_track_history else 0.0
+            pixel_speed = self._pixel_speed(state.samples) if history_seconds >= self.minimum_track_history else 0.0
+            above_enter = speed >= self.enter_threshold or pixel_speed >= self.pixel_enter_threshold
+            below_exit = speed <= self.exit_threshold and pixel_speed <= self.pixel_exit_threshold
             if history_seconds < self.minimum_track_history:
                 state.high_since = None
                 state.low_since = None
             elif not state.running:
                 state.low_since = None
-                state.high_since = source_time if speed >= self.enter_threshold and state.high_since is None else state.high_since
-                if speed < self.enter_threshold:
+                state.high_since = source_time if above_enter and state.high_since is None else state.high_since
+                if not above_enter:
                     state.high_since = None
                 if state.high_since is not None and source_time - state.high_since >= self.confirm_seconds:
                     state.running = True
@@ -96,8 +123,8 @@ class RunningDetector:
                     state.low_since = None
             else:
                 state.high_since = None
-                state.low_since = source_time if speed <= self.exit_threshold and state.low_since is None else state.low_since
-                if speed > self.exit_threshold:
+                state.low_since = source_time if below_exit and state.low_since is None else state.low_since
+                if not below_exit:
                     state.low_since = None
                 if state.low_since is not None and source_time - state.low_since >= self.release_seconds:
                     state.running = False
@@ -107,6 +134,7 @@ class RunningDetector:
             result[track_id] = {
                 "running": state.running,
                 "normalized_speed": round(speed, 3),
+                "pixel_speed": round(pixel_speed, 1),
                 "running_duration": round(max(0.0, duration), 3),
                 "history_seconds": round(history_seconds, 3),
             }

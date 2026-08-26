@@ -11,7 +11,10 @@ from urllib.request import ProxyHandler, Request, build_opener
 from teaching_console.runtime_paths import ensure_writable_data_root
 
 
-DEFAULT_PI_URL = "http://huian-pi.local:8765"
+# The maintained Pi showcase/status service listens on 8780.  Keep this in
+# one place so a fresh Teaching Console can discover the normal LAN service
+# without asking children to type an address.
+DEFAULT_PI_URL = "http://huian-pi.local:8780"
 _DIRECT_OPENER = build_opener(ProxyHandler({}))
 
 
@@ -30,6 +33,12 @@ def normalize_base_url(value: str | None) -> str:
         return DEFAULT_PI_URL
     if not text.startswith(("http://", "https://")):
         text = "http://" + text
+    # Users often save the browser page they just visited.  API calls must use
+    # the service root, not /teacher or /display below it.
+    for page_path in ("/teacher", "/display"):
+        if text.endswith(page_path):
+            text = text[: -len(page_path)]
+            break
     return text
 
 
@@ -108,3 +117,12 @@ def live_status_rows(status: Mapping[str, object]) -> tuple[tuple[str, str], ...
 
 def demo_case_row(case: Mapping[str, object]) -> tuple[str, str, str]:
     return str(case.get("case_id", "")), str(case.get("title", "")), f"{float(case.get('duration', 0.0) or 0.0):.1f} s"
+
+
+def showcase_status_text(status: Mapping[str, object] | None) -> str:
+    """Render one quiet, display-safe line from the real Pi snapshot."""
+    if not status:
+        return "树莓派：等待连接"
+    pi = "树莓派在线" if status.get("camera_online") else "树莓派在线（相机等待）"
+    esp32 = "ESP32在线" if status.get("esp32_online") else "ESP32等待连接"
+    return f"{pi} · {esp32}"

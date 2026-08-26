@@ -101,7 +101,7 @@
     "imgsz": 640,
     "confidence": 0.35,
     "interval_seconds": 1,
-    "confirmation_hits": 2,
+    "confirmation_hits": 3,
     "confirmation_window": 3
   },
   "running_detection": {
@@ -113,6 +113,11 @@
     "minimum_track_history": 0.5,
     "max_sample_speed": 5.0,
     "calibration_status": "candidate_test_thresholds_pending_real_running_ground_truth"
+  },
+  "evacuation_guidance": {
+    "enabled": true,
+    "minimum_people": 4,
+    "minimum_gap": 2
   },
   "crowd_calibration": {
     "calibrated": false,

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from teaching_console.services.research_prediction_service import ResearchPredictionService
+from teaching_console.services.research_prediction_service import ResearchPredictionService, annotation_horizons, prediction_horizons
 from teaching_console.services.research_store import ResearchStore
 
 
@@ -51,6 +51,16 @@ class PredictionServiceTests(unittest.TestCase):
         self.assertTrue((output / "prediction_ground_truth.csv").is_file())
         self.assertEqual(json.loads((output / "experiment_summary.json").read_text(encoding="utf-8"))["prediction_metrics"]["mae_10"], 2.0)
 
+    def test_short_video_uses_adaptive_horizons_and_keeps_three_slots(self) -> None:
+        self.assertEqual(prediction_horizons(60), (10, 20, 30))
+        self.assertEqual(prediction_horizons(20), (5, 10, 15))
+        self.assertEqual(prediction_horizons(10), (1, 5, 7))
+        anchors = self.service.generate_anchors(self.experiment_id, timeline(), 25)
+        self.assertEqual(len(anchors), 1)
+        self.assertEqual(annotation_horizons(anchors[0]), (5, 10, 15))
+        self.assertLessEqual(anchors[0]["anchor_time_seconds"] + 15, 25)
+        self.service.save_prediction_gt(anchors[0]["id"], 10, 7)
+        self.assertEqual(self.store.prediction_annotations(self.experiment_id)[0]["error_10"], 1.0)
     def test_invalid_input_and_empty_metrics(self) -> None:
         self.assertEqual(self.service.prediction_metrics(self.experiment_id)["mae_10"], None)
         item = self.service.generate_anchors(self.experiment_id, timeline(), 40)[0]

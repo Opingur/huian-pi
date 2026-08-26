@@ -14,6 +14,7 @@ import cv2
 from communication.esp32 import ESP32Publisher
 from decision.alarm import AlarmDebouncer
 from decision.crowd_index import calculate_crowd_index
+from decision.evacuation_guidance import exit_guidance
 from decision.crowd_predictor import CrowdPredictor
 from decision.flow_analysis import FlowRiskAnalyzer
 from decision.risk_engine import RiskEngine
@@ -64,13 +65,16 @@ def _finalize_visual_alarm(vision_risk: str, debounced_alarm: str, alarm_reason:
 class TrackedFrameProcessor:
     """Shared BGR pipeline; camera mode uses latest-frame workers, offline remains synchronous."""
 
-    def __init__(self, config: dict[str, Any], build_status: Callable[..., dict[str, object]]) -> None:
+    def __init__(
+        self, config: dict[str, Any], build_status: Callable[..., dict[str, object]], publisher: Any | None = None,
+    ) -> None:
         self.config = config
         self.build_status = build_status
         self.tracker = PersonTracker(
             Path(__file__).resolve().parents[1] / config["model_path"],
             config["confidence"],
             config["tracking"].get("tracker", "bytetrack.yaml"),
+            imgsz=int(config.get("tracking", {}).get("imgsz", 640)),
         )
         self.flow = PeopleFlowAnalyzer(
             window_seconds=config["flow_window_seconds"],
@@ -85,7 +89,9 @@ class TrackedFrameProcessor:
         self.flow_risk = FlowRiskAnalyzer(config.get("flow_risk", {}))
         self.alarms = AlarmDebouncer(config["alarm"])
         self.explain_lock = ExplainTargetLock(config.get("display", {}).get("explain_lock_seconds", 1.0))
-        self.publisher = ESP32Publisher(config.get("esp32"), legacy_dry_run=bool(config.get("esp32_dry_run", True)))
+        self.publisher = publisher or ESP32Publisher(
+            config.get("esp32"), legacy_dry_run=bool(config.get("esp32_dry_run", True))
+        )
         self.runtime_snapshot = RuntimeSnapshotPublisher.from_config(config.get("teacher_runtime"))
         self.esp32_status = None
         self.esp32_status_stale = True
@@ -100,6 +106,34 @@ class TrackedFrameProcessor:
         # Serial reads only drain complete kernel-buffered lines; never reopen or reparse UART.
         self.esp32_status = self.publisher.poll_esp32_status()
         self.esp32_status_stale = self.publisher.esp32_status_is_stale()
+
+    def _esp32_snapshot_fields(self) -> dict[str, object]:
+        fields = {
+            "mq2_value": None, "mq2_phase": None, "mq2_ready": None,
+            "mq2_warmup_remaining_ms": None, "mq2_calibration_remaining_ms": None,
+            "mq2_baseline": None, "mq2_trigger_threshold": None,
+            "mq2_release_threshold": None, "mq2_warning": None,
+            "temperature_c": None, "temperature_valid": None,
+            "temperature_warning": None, "humidity_percent": None,
+            "manual_alarm": None, "manual_alarm_remaining_ms": None,
+            "manual_alarm_source": None, "esp32_system_state": None,
+        }
+        if self.esp32_status is None or self.esp32_status_stale:
+            return fields
+        esp32 = self.esp32_status
+        fields.update({
+            "mq2_value": esp32.mq2_value,
+            "mq2_warning": esp32.mq2_warning,
+            "temperature_c": esp32.temperature_c if esp32.temperature_valid else None,
+            "temperature_valid": esp32.temperature_valid,
+            "temperature_warning": esp32.temperature_warning,
+            "esp32_system_state": esp32.system_state,
+        })
+        extras = dict(esp32.extras)
+        if "recommended_direction" in extras:
+            fields["esp32_recommended_direction"] = extras.pop("recommended_direction")
+        fields.update(extras)
+        return fields
 
     def _log_fire_inference(self, fire_status: dict[str, object]) -> None:
         sources = ",".join(self.fire_evidence.last_result.get("inference_sources", [])) or "none"
@@ -142,6 +176,7 @@ class TrackedFrameProcessor:
         )
         vision_risk, visual_alarm, alarm_reason = _finalize_visual_alarm(vision_risk, debounced_alarm, alarm_reason)
         status = self.build_status(self.config, trend, vision_risk, crowd_metrics, forecast)
+        status.update(exit_guidance(left_people, right_people, self.config.get("evacuation_guidance")))
         status.update(flow_metrics)
         status.update({
             "source_time": round(source_timestamp, 3),
@@ -164,10 +199,14 @@ class TrackedFrameProcessor:
         status.update(fire_status)
         status.update({
             "mode": "live",
+            # A frame can only reach this point after the configured camera path
+            # has supplied it, so this is an observed runtime fact rather than a
+            # configuration-only claim.
             "camera_online": str(self.config.get("source_type", "")).lower() == "camera",
             "esp32_online": bool(self.esp32_status and not self.esp32_status_stale),
             "current_event": status.get("alarm_reason") or "正常监测",
         })
+        status.update(self._esp32_snapshot_fields())
         annotated = draw_dashboard(
             frame_bgr, analysis["tracks"], status,
             conflict_zone=self.config.get("conflict_zone", []),
@@ -262,6 +301,7 @@ def run_tracked_video(
     source_path: Path,
     output_dir: Path,
     build_status: Callable[..., dict[str, object]],
+    publisher: Any | None = None,
 ) -> None:
     """Read an OpenCV video and send each BGR frame to TrackedFrameProcessor."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -270,7 +310,7 @@ def run_tracked_video(
     frame_count = source.frame_count
     width = source.width
     height = source.height
-    processor = TrackedFrameProcessor(config, build_status)
+    processor = TrackedFrameProcessor(config, build_status, publisher=publisher)
     status_path = output_dir / "status.jsonl"
     output_name = config.get("output_video_name", f"{source_path.stem}_annotated.mp4")
     output_path = output_dir / str(output_name)
@@ -375,6 +415,9 @@ def run_tracked_video(
         "red_event_count": alarm_events["RED"],
         "red_duration_seconds": round(alarm_durations["RED"], 3),
         "minimum_convergence_eta": min_convergence_eta,
+        "bridge_delivery_attempts": getattr(processor.publisher, "delivery_attempts", None),
+        "bridge_delivery_successes": getattr(processor.publisher, "delivery_successes", None),
+        "bridge_delivery_failures": getattr(processor.publisher, "delivery_failures", None),
         "annotated_video": str(output_path) if writer is not None else None,
         "status_jsonl": str(status_path),
     })

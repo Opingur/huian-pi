@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from ui.dashboard_layout import CANVAS_HEIGHT, CANVAS_WIDTH, STATUS_Y, VIDEO_HEIGHT, VIDEO_WIDTH, _draw_live_trend, _environment_rows, _summary, _top_fire_text, draw_dashboard
+from ui.dashboard_layout import CANVAS_HEIGHT, CANVAS_WIDTH, STATUS_Y, VIDEO_HEIGHT, VIDEO_WIDTH, _draw_flow_card, _draw_live_trend, _environment_rows, _summary, _top_fire_text, draw_dashboard
 
 
 class DashboardLayoutTests(unittest.TestCase):
@@ -83,8 +83,8 @@ class DashboardLayoutTests(unittest.TestCase):
         esp32 = SimpleNamespace(system_state="FIRE", mq2_value=235, mq2_warning=True, temperature_c=36.5, temperature_valid=True, temperature_warning=True)
         status = {**self.status, "vision_fire_suspected": True}
         context = {**self.context, "esp32_status": esp32, "esp32_status_stale": False, "esp32_configured": True}
-        self.assertEqual(_summary(status, context), ("综合状态：火情警报", (192, 92, 224)))
-        self.assertIn(("多源状态", "多源确认", (192, 92, 224)), _environment_rows(status, context))
+        self.assertEqual(_summary(status, context), ("综合状态：火情报警", (235, 82, 82)))
+        self.assertIn(("多源状态", "火情确认", (235, 82, 82)), _environment_rows(status, context))
 
     def test_invalid_temperature_never_becomes_zero_or_none(self):
         esp32 = SimpleNamespace(system_state="NORMAL", mq2_value=0, mq2_warning=False, temperature_c=None, temperature_valid=False, temperature_warning=False)
@@ -128,6 +128,13 @@ class DashboardLayoutTests(unittest.TestCase):
         self.assertEqual(self._render(mode="explain").shape, (CANVAS_HEIGHT, CANVAS_WIDTH, 3))
         self.assertEqual(self._render(mode="validation").shape, (CANVAS_HEIGHT, CANVAS_WIDTH, 3))
         self.assertEqual(VIDEO_HEIGHT, 740)
+
+    def test_flow_card_keeps_all_text_above_the_orange_status_bar(self):
+        entries, canvas = [], np.zeros((CANVAS_HEIGHT, CANVAS_WIDTH, 3), dtype=np.uint8)
+        _draw_flow_card(canvas, {**self.status, "total_people": 11, "tracked_people": 11, "moving_people": 5,
+                                  "running_count": 0, "crowd_index": 0.34, "running_event": False}, entries)
+        self.assertIn("当前事件", [entry[1] for entry in entries])
+        self.assertLess(max(entry[0][1] for entry in entries), STATUS_Y - 24)
 
 
 if __name__ == "__main__":

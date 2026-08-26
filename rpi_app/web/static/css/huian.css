@@ -1,0 +1,14 @@
+:root { --ground: #eeeeee; --line: #c9c9c9; --ink: #222222; }
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body { background: var(--ground); color: var(--ink); font: 14px/1.4 "Microsoft YaHei", Arial, sans-serif; }
+.hidden { display: none !important; }
+.display-page { width: 100vw; height: 100vh; }
+.showcase-stage { position: relative; display: grid; place-items: center; width: 100%; height: 100%; padding: 14px 14px 58px; }
+.showcase-video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000000; }
+.showcase-empty { color: #666666; font-size: 16px; }
+.showcase-empty p { margin: 0; }
+.case-toolbar { position: absolute; right: 14px; bottom: 12px; left: 14px; display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
+.case-button { padding: 6px 10px; color: #222222; background: rgba(250, 250, 250, .96); border: 1px solid #bcbcbc; border-radius: 2px; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); cursor: pointer; font: inherit; }
+.case-button:hover, .case-button:focus-visible, .case-button.is-selected { border-color: #555555; background: #ffffff; outline: 1px dotted #666666; outline-offset: -4px; }
+@media (max-width: 700px) { .showcase-stage { padding: 8px 8px 88px; } .case-toolbar { right: 8px; bottom: 8px; left: 8px; } }

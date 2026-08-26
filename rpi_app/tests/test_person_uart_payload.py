@@ -9,5 +9,6 @@ def test_manual_person_uart_payload_matches_the_formal_protocol():
     assert tuple(payload) == UART_FIELDS
     assert payload["total_people"] == 2
     assert payload["vision_risk"] == "NORMAL"
+    assert payload["fire_confirmed"] is False
     assert payload["running_event"] is False
     assert payload["running_count"] == 0
