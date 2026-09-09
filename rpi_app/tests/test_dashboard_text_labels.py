@@ -1,5 +1,7 @@
 import inspect
+import json
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -7,7 +9,27 @@ from ui import dashboard_layout
 from ui.flow_group_visualizer import draw_flow_legend
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PRODUCT_NAME = '慧眼疏流安全检测系统'
+
+
 class DashboardTextLabelTests(unittest.TestCase):
+    def test_active_product_name_is_consistent_across_pi_display_surfaces(self):
+        active_sources = (
+            PROJECT_ROOT / "rpi_app" / "ui" / "dashboard_layout.py",
+            PROJECT_ROOT / "rpi_app" / "ui" / "mode_display.py",
+            PROJECT_ROOT / "rpi_app" / "ui" / "chinese_display.py",
+            PROJECT_ROOT / "rpi_app" / "ui" / "startup_screen.py",
+            PROJECT_ROOT / "rpi_app" / "web" / "static" / "index.html",
+            PROJECT_ROOT / "rpi_app" / "web" / "static" / "display.html",
+        )
+        for path in active_sources:
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                self.assertIn(PRODUCT_NAME, source)
+                self.assertNotIn("慧安安全监测系统", source)
+        config = json.loads((PROJECT_ROOT / "rpi_app" / "configs" / "rpi_imx219_live.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["display"]["window_name"], PRODUCT_NAME)
     def test_dashboard_has_no_visual_smoke_row_but_keeps_mq2_smoke(self):
         rows = dashboard_layout._environment_rows(
             {}, {"esp32_status": None, "esp32_status_stale": True, "esp32_configured": False, "fire_detections": []}

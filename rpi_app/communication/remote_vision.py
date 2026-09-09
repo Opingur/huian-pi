@@ -44,6 +44,25 @@ def validate_remote_status(status: object) -> dict[str, object]:
     return compact
 
 
+def esp32_status_payload(status: Esp32Status | None) -> dict[str, object] | None:
+    """Serialize the latest Pi-owned ESP32 telemetry for the Windows presenter."""
+    if status is None:
+        return None
+    payload: dict[str, object] = {
+        "protocol_version": status.protocol_version,
+        "message_type": "esp32_status",
+        "uptime_ms": status.uptime_ms,
+        "mq2_value": status.mq2_value,
+        "mq2_warning": status.mq2_warning,
+        "temperature_c": status.temperature_c,
+        "temperature_valid": status.temperature_valid,
+        "temperature_warning": status.temperature_warning,
+        "system_state": status.system_state,
+        "vision_valid": status.vision_valid,
+    }
+    payload.update(dict(status.extras))
+    return payload
+
 def _normal_status() -> dict[str, object]:
     return {
         "protocol_version": 1, "timestamp": int(time.time()), "vision_risk": "NORMAL",
@@ -72,6 +91,7 @@ class SourceArbitratingPublisher:
         self._clock = clock
         self._lock = threading.RLock()
         self._remote_until = 0.0
+        self._last_remote_risk: str | None = None
         self._closed = False
 
     @property
@@ -100,10 +120,13 @@ class SourceArbitratingPublisher:
             if self._closed:
                 return False
             now = self._clock()
-            if now >= self._remote_until:
-                # Switching source must not wait behind a just-sent local camera frame.
+            remote_risk = str(status.get("vision_risk", "NORMAL"))
+            if now >= self._remote_until or remote_risk != self._last_remote_risk:
+                # A source hand-off or real risk transition must reach hardware
+                # immediately; steady same-risk frames remain UART-rate-limited.
                 self._publisher.reset_send_interval()
             self._remote_until = now + self._lease_seconds
+            self._last_remote_risk = remote_risk
             return self._publisher.send_status(status, source_timestamp=now)
 
     def release_remote(self) -> bool:
@@ -112,6 +135,7 @@ class SourceArbitratingPublisher:
             if self._closed:
                 return False
             self._remote_until = 0.0
+            self._last_remote_risk = "NORMAL"
             self._publisher.reset_send_interval()
             return self._publisher.send_status(_normal_status(), source_timestamp=self._clock())
 
@@ -195,7 +219,11 @@ class RemoteVisionServer:
                 except RuntimeError as error:
                     self._json({"ok": False, "error": str(error)}, HTTPStatus.SERVICE_UNAVAILABLE)
                     return
-                self._json({"ok": delivered, "remote_active": controller.publisher.remote_active})
+                self._json({
+                    "ok": delivered,
+                    "remote_active": controller.publisher.remote_active,
+                    "esp32_status": esp32_status_payload(controller.publisher.poll_esp32_status()),
+                })
 
         self._server = ThreadingHTTPServer((self.host, self.port), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, name="huian-remote-vision", daemon=True)

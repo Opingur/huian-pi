@@ -11,10 +11,11 @@ from urllib.request import ProxyHandler, Request, build_opener
 from teaching_console.runtime_paths import ensure_writable_data_root
 
 
-# The maintained Pi showcase/status service listens on 8780.  Keep this in
-# one place so a fresh Teaching Console can discover the normal LAN service
-# without asking children to type an address.
-DEFAULT_PI_URL = "http://huian-pi.local:8780"
+# The formal showcase is self-contained: the Pi creates the Huian_Loudao
+# hotspot and keeps this fixed LAN address.  This needs no router, Internet,
+# mDNS, or Windows proxy configuration.  A saved teacher_remote.json can
+# still override the address for development or wired-LAN use.
+DEFAULT_PI_URL = "http://192.168.50.1:8780"
 _DIRECT_OPENER = build_opener(ProxyHandler({}))
 
 

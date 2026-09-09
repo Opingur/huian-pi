@@ -5,10 +5,10 @@
 ## Pi → ESP32 视觉载荷
 
 ```json
-{"protocol_version":1,"timestamp":1720000000,"vision_risk":"CROWD","crowd_index":0.72,"total_people":12,"direction_conflict":true,"vision_fire_suspected":false,"vision_smoke_suspected":false,"vision_fire_confidence":0.0,"vision_smoke_confidence":0.0,"running_event":true,"running_count":1}
+{"protocol_version":1,"timestamp":1720000000,"vision_risk":"CROWD","crowd_index":0.72,"total_people":12,"recommended_direction":"RIGHT","arrow_mode":"RIGHT_FLASH","direction_conflict":true,"vision_fire_suspected":false,"vision_smoke_suspected":false,"vision_fire_confidence":0.0,"vision_smoke_confidence":0.0,"running_event":true,"running_count":1}
 ```
 
-`running_event` / `running_count` 仅是低优先级跑动轻提示，不改写 `vision_risk`。Pi 发送字段由 `rpi_app/communication/esp32.py:UART_FIELDS` 唯一维护；任何 Dashboard、轨迹或框数据都不进入协议。
+`running_event` / `running_count` 仅是低优先级跑动轻提示，不改写 `vision_risk`。Pi 发送字段由 `rpi_app/communication/esp32.py:UART_FIELDS` 唯一维护；任何 Dashboard、轨迹或框数据都不进入协议。`arrow_mode` 是经现场标定后的主流方向提示：摄像头画面向上/向下的人流，分别映射到模型中真实的 LEFT / RIGHT 通道。仅在同向轨迹达到人数、占比和时间稳定条件后点亮单侧箭头；拥挤预警或跑动时，同一方向闪烁。未完成标定、方向均衡或轨迹不足时为 `OFF`，绝不从画面左右人数猜测疏散方向。
 
 ## ESP32 → Pi 状态镜像
 

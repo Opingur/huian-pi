@@ -28,8 +28,8 @@ def test_formal_state_parser_and_rank_keep_crowd_separate_from_fire():
 def test_verified_hardware_mapping_and_serial2_remain_explicit():
     sketch = _source()
     for declaration in (
-        "constexpr uint8_t LEFT_R = 32;", "constexpr uint8_t LEFT_G = 26;", "constexpr uint8_t LEFT_B = 27;",
-        "constexpr uint8_t RIGHT_R = 13;", "constexpr uint8_t RIGHT_G = 14;", "constexpr uint8_t RIGHT_B = 33;",
+        "constexpr uint8_t LEFT_R = 27;", "constexpr uint8_t LEFT_G = 32;", "constexpr uint8_t LEFT_B = 26;",
+        "constexpr uint8_t RIGHT_R = 33;", "constexpr uint8_t RIGHT_G = 13;", "constexpr uint8_t RIGHT_B = 14;",
         "constexpr uint8_t BUZZER_PIN = 25;", "constexpr uint8_t MQ2_PIN = 34;", "constexpr uint8_t DHT_PIN = 4;",
         "constexpr uint8_t PI_RX_PIN = 16;", "constexpr uint8_t PI_TX_PIN = 17;",
     ):
@@ -48,8 +48,8 @@ def test_current_buzzer_and_timeout_semantics_are_present():
     assert "case BuzzerMode::RUNNING: on = (elapsed % 2000UL) < 80UL;" in sketch
     assert "case BuzzerMode::FIRE: on = true;" in sketch
     assert "VISION_TIMEOUT_MS = 5000UL" in sketch
-    assert "showCommunicationOffline();" in sketch
-    assert "setLeft(true, false, true);" in sketch and "setRight(true, false, true);" in sketch
+    assert "showCommunicationOffline();" not in sketch
+    assert "setLeft(true, false, false);" in sketch and "setRight(true, false, false);" in sketch
 
 
 def test_status_json_is_mirrored_to_pi_uart_and_usb_serial():
@@ -72,3 +72,12 @@ def test_running_event_is_auxiliary_and_does_not_override_formal_alerts():
     assert "vision.runningCount =" in sketch and "doc[\"running_count\"]" in sketch
     assert "return vision.runningEvent ? BuzzerMode::RUNNING : BuzzerMode::SILENT;" in sketch
     assert "case RouteState::CROWD: return BuzzerMode::CROWD;" in sketch
+
+def test_paired_exit_sign_modes_are_supported_and_suppressed_for_fire_or_manual_alarm():
+    sketch = _source()
+    assert "enum class ArrowMode" in sketch
+    for mode in ("LEFT_ONLY", "RIGHT_ONLY", "LEFT_FLASH", "RIGHT_FLASH"):
+        assert f"ArrowMode::{mode}" in sketch
+    assert 'doc["arrow_mode"]' in sketch
+    assert "if (fireEmergency || manualAlarm) return ArrowMode::OFF;" in sketch
+    assert "drawArrowPair(ARROW_LEFT, ARROW_RIGHT);" in sketch

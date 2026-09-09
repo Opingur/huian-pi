@@ -203,17 +203,26 @@ class FireEvidenceTracker:
         values = dict(config or {})
         self.enabled = bool(enabled)
         self.interval_seconds = float(values.get("interval_seconds", 1.0))
-        self.confirmation_hits = int(values.get("confirmation_hits", 2))
-        self.confirmation_window = int(values.get("confirmation_window", 4))
+        # A raw model hit is private evidence.  It becomes visible only after the
+        # same location has repeated; it becomes a visual fire alert after a
+        # longer consecutive same-location run.
+        self.confirmation_hits = int(values.get("confirmation_hits", 3))
+        self.candidate_display_hits = int(values.get("candidate_display_hits", min(2, self.confirmation_hits)))
+        self.confirmation_iou_threshold = float(values.get("confirmation_iou_threshold", 0.35))
+        self.confirmation_window = int(values.get("confirmation_window", self.confirmation_hits))
         legacy_hold = float(values.get("release_hold_seconds", 2.0))
         self.bbox_hold_seconds = float(values.get("bbox_hold_seconds", legacy_hold))
         self.visual_alert_hold_seconds = float(values.get("visual_alert_hold_seconds", legacy_hold))
-        if (self.interval_seconds <= 0 or self.confirmation_hits <= 0
+        if (self.interval_seconds <= 0 or self.candidate_display_hits <= 0
+                or self.confirmation_hits < self.candidate_display_hits
                 or self.confirmation_window <= 0 or self.confirmation_hits > self.confirmation_window
+                or not 0.0 < self.confirmation_iou_threshold <= 1.0
                 or self.bbox_hold_seconds < 0 or self.visual_alert_hold_seconds < 0):
             raise ValueError("fire_detection confirmation and hold settings are invalid")
-        self.fire_history: deque[bool] = deque(maxlen=self.confirmation_window)
         self.stable_fire = False
+        self.candidate_streak = 0
+        self.candidate_bbox: list[int] | None = None
+        self.candidate_detections: list[dict[str, object]] = []
         self.last_fire_detection_time: float | None = None
         self.last_fire_detections: list[dict[str, object]] = []
         self.last_fire_confidence = 0.0
@@ -242,7 +251,34 @@ class FireEvidenceTracker:
         if self.stable_fire and not self._within(self.last_fire_detection_time, source_timestamp, self.visual_alert_hold_seconds):
             self.stable_fire = False
             self.last_fire_confidence = 0.0
-            self.fire_history.clear()
+
+    @staticmethod
+    def _best_fire_detection(detections: list[dict[str, object]]) -> dict[str, object] | None:
+        return max(detections, key=lambda item: float(item.get("confidence", 0.0)), default=None)
+
+    def _record_candidate(self, detections: list[dict[str, object]], source_timestamp: float) -> bool:
+        best = self._best_fire_detection(detections)
+        if best is None:
+            self.candidate_streak = 0
+            self.candidate_bbox = None
+            self.candidate_detections = []
+            return False
+        bbox = list(best["bbox"])
+        if self.candidate_bbox is not None and bbox_iou(bbox, self.candidate_bbox) >= self.confirmation_iou_threshold:
+            self.candidate_streak += 1
+        else:
+            self.candidate_streak = 1
+        self.candidate_bbox = bbox
+        # Never let unrelated raw boxes from the same inference leak into the public dashboard.
+        self.candidate_detections = [best]
+        candidate_visible = self.candidate_streak >= self.candidate_display_hits
+        if candidate_visible:
+            self.last_fire_detection_time = source_timestamp
+            self.last_fire_detections = [deepcopy(best)]
+            self.last_fire_confidence = float(best.get("confidence", 0.0))
+        if self.candidate_streak >= self.confirmation_hits:
+            self.stable_fire = True
+        return candidate_visible
 
     def record(self, result: Mapping[str, object], source_timestamp: float) -> None:
         self._refresh_release_state(source_timestamp)
@@ -259,38 +295,39 @@ class FireEvidenceTracker:
             "detections": fire_detections,
         }
         self.last_inference_time = source_timestamp
-        self.fire_history.append(raw_fire)
         if raw_fire:
-            self.last_fire_detection_time = source_timestamp
-            self.last_fire_detections = fire_detections
-            self.last_fire_confidence = fire_confidence
-            if sum(self.fire_history) >= self.confirmation_hits:
-                self.stable_fire = True
+            self._record_candidate(fire_detections, source_timestamp)
+        else:
+            # Consecutive means consecutive: an inference miss restarts the location streak.
+            self.candidate_streak = 0
+            self.candidate_bbox = None
+            self.candidate_detections = []
         if self.last_result.get("inference_ms") is not None:
             self.inference_samples.append(float(self.last_result["inference_ms"]))
-
-    @staticmethod
-    def _held_detections(detections: list[dict[str, object]]) -> list[dict[str, object]]:
-        return [{**deepcopy(item), "temporal_hold": True} for item in detections]
 
     def status(self, source_timestamp: float) -> dict[str, object]:
         self._refresh_release_state(source_timestamp)
         result = self.last_result
         raw_fire = bool(result["fire_detected"])
+        candidate_visible = bool(raw_fire and self.candidate_streak >= self.candidate_display_hits)
         fire_recent = self.enabled and self._within(self.last_fire_detection_time, source_timestamp, self.visual_alert_hold_seconds)
-        display_detections = list(result.get("detections", []))
-        held_fire = not raw_fire and bool(self.last_fire_detections) and self._within(self.last_fire_detection_time, source_timestamp, self.bbox_hold_seconds)
+        display_detections = [deepcopy(item) for item in self.candidate_detections] if candidate_visible else []
+        held_fire = (not candidate_visible and bool(self.last_fire_detections)
+                     and self._within(self.last_fire_detection_time, source_timestamp, self.bbox_hold_seconds))
         if held_fire:
             display_detections.extend(self._held_detections(self.last_fire_detections))
         age = None if self.last_inference_time is None else round(max(0.0, source_timestamp - self.last_inference_time), 2)
         return {
+            # Raw evidence is retained for logs and diagnosis only; public UI must use fire_candidate_visible.
             "fire_detected_raw": raw_fire,
+            "fire_candidate_visible": candidate_visible,
+            "fire_candidate_streak": self.candidate_streak,
             "smoke_detected_raw": False,
             "recent_fire_evidence": bool(fire_recent),
             "recent_smoke_evidence": False,
             "vision_fire_suspected": bool(self.enabled and self.stable_fire),
             "vision_smoke_suspected": False,
-            "vision_fire_confidence": float(result["fire_confidence"] if raw_fire else self.last_fire_confidence if fire_recent else 0.0),
+            "vision_fire_confidence": float(result["fire_confidence"] if candidate_visible else self.last_fire_confidence if fire_recent else 0.0),
             "vision_smoke_confidence": 0.0,
             "fire_model_enabled": self.enabled,
             "fire_model_last_inference_ms": result.get("inference_ms"),
@@ -298,17 +335,26 @@ class FireEvidenceTracker:
             "fire_detection_age": age,
             "fire_display_detections": display_detections,
             "fire_bbox_temporal_hold": held_fire,
-            "fire_alert_temporal_hold": bool(fire_recent and not raw_fire),
+            "fire_alert_temporal_hold": bool(fire_recent and not candidate_visible),
             "fire_confirmed": bool(self.enabled and self.stable_fire),
         }
+
+    @staticmethod
+    def _held_detections(detections: list[dict[str, object]]) -> list[dict[str, object]]:
+        return [{**deepcopy(item), "temporal_hold": True} for item in detections]
+
 def single_image_fire_status(result: Mapping[str, object], enabled: bool) -> dict[str, object]:
     """Image mode reports raw visual evidence only; it never claims temporal confirmation."""
     return {
+        # A still image cannot prove consecutive same-location evidence, so it
+        # never publishes a fire candidate or box to the formal dashboard.
         "fire_detected_raw": bool(result["fire_detected"]),
+        "fire_candidate_visible": False,
+        "fire_candidate_streak": 0,
         "smoke_detected_raw": False,
         "vision_fire_suspected": False,
         "vision_smoke_suspected": False,
-        "recent_fire_evidence": bool(result["fire_detected"]),
+        "recent_fire_evidence": False,
         "recent_smoke_evidence": False,
         "vision_fire_confidence": float(result["fire_confidence"]),
         "vision_smoke_confidence": 0.0,
@@ -316,7 +362,7 @@ def single_image_fire_status(result: Mapping[str, object], enabled: bool) -> dic
         "fire_model_last_inference_ms": result.get("inference_ms"),
         "fire_model_avg_inference_ms": result.get("inference_ms"),
         "fire_detection_age": 0.0 if enabled else None,
-        "fire_display_detections": list(result.get("detections", [])),
+        "fire_display_detections": [],
         "fire_bbox_temporal_hold": False,
         "fire_alert_temporal_hold": False,
         "fire_confirmed": False,

@@ -65,7 +65,7 @@
     "show_direction_arrow": true,
     "show_conflict_zone": false,
     "fullscreen": true,
-    "window_name": "慧安安全监测系统"
+    "window_name": "慧眼疏流安全检测系统"
   },
   "crowd_index": {
     "left_capacity": 8,
@@ -91,6 +91,27 @@
     "single_flow_min_dominance_ratio": 0.7,
     "prediction_warning_people": 8
   },
+  "evacuation_guidance": {
+    "enabled": true,
+    "mode": "dominant_depth_flow",
+    "screen_up_arrow": "RIGHT",
+    "screen_down_arrow": "LEFT",
+    "minimum_moving_people": 2,
+    "running_min_moving_people": 1,
+    "dominance_ratio": 0.7,
+    "vertical_axis_dominance": 1.25,
+    "minimum_depth_motion": 0.015,
+    "minimum_direction_gap": 1,
+    "activation_hold_seconds": 0.8,
+    "release_hold_seconds": 1.2,
+    "flash_attention": true,
+    "attention_risks": [
+      "WARNING",
+      "CROWD"
+    ],
+    "switch_hold_seconds": 1.5,
+    "route_calibrated": true
+  },
   "fire_detection": {
     "enabled": true,
     "model_path": "../models/fire_n.pt",
@@ -102,7 +123,9 @@
     "tile_cols": 2,
     "tile_overlap": 0.15,
     "full_frame_pass": true,
-    "confirmation_hits": 2,
+    "candidate_display_hits": 2,
+    "confirmation_hits": 3,
+    "confirmation_iou_threshold": 0.35,
     "confirmation_window": 4,
     "release_hold_seconds": 2.0
   },

@@ -130,7 +130,7 @@ def draw_flow_tracks(image, detections, motions, options, flow_groups, text_entr
         color, thickness = _visual_style(group, explain, is_highlighted, highlighted_group)
         if is_running:
             # Target-level red is a running cue only; it never changes global risk.
-            color, thickness = (60, 60, 235), max(2, thickness)
+            color, thickness = (60, 60, 235), max(5, thickness)
         x1, y1, x2, y2 = (int(detection[key]) for key in ("x1", "y1", "x2", "y2"))
         if options.get("show_boxes", True):
             cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)

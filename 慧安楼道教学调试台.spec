@@ -3,6 +3,11 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [
     ('teaching_console/assets/huian_logo.png', '.'),
+    # Seed the packaged display with the router-free Pi hotspot endpoint.
+    ('teacher_remote.json', 'huian_teaching_data'),
+    # Authorized for trusted offline demonstration PCs: lets local vision relay
+    # alarms to the Pi, which retains sole UART control of the ESP32.
+    ('showcase_bridge.json', 'huian_teaching_data'),
     # Keep source files beside the EXE so the source-map and open-source tools work.
     ('teaching_console', 'teaching_console'),
     ('teaching_examples', 'teaching_examples'),
@@ -10,6 +15,7 @@ datas = [
     ('esp32_firmware', 'esp32_firmware'),
     ('models', 'models'),
     ('test_data', 'test_data'),
+    ('展示端正式视频素材', '展示端正式视频素材'),
     ('validation/README.md', 'validation'),
     ('validation/templates', 'validation/templates'),
     ('validation/scripts', 'validation/scripts'),
@@ -43,7 +49,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='慧安楼道教学调试台',
+    name='慧眼疏流安全检测系统',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -64,5 +70,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='慧安楼道教学调试台',
+    name='慧眼疏流安全检测系统',
 )

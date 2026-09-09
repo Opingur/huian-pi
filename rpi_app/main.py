@@ -54,7 +54,12 @@ def build_status(config: dict[str, Any], trend: FlowTrend, vision_risk: str, cro
         "danger_people_threshold": forecast["danger_people_threshold"],
         "timestamp": int(time.time()),
     }
-    status.update(exit_guidance(trend.left_people, trend.right_people, config.get("evacuation_guidance")))
+    status.update(exit_guidance(
+        trend.left_people,
+        trend.right_people,
+        config.get("evacuation_guidance"),
+        vision_risk=vision_risk,
+    ))
     return status
 
 

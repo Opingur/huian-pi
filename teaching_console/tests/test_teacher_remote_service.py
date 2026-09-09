@@ -20,6 +20,7 @@ class Response:
 
 class TeacherRemoteClientTests(unittest.TestCase):
     def test_default_and_persisted_address(self):
+        self.assertEqual(DEFAULT_PI_URL, "http://192.168.50.1:8780")
         self.assertEqual(normalize_base_url(""), DEFAULT_PI_URL)
         self.assertEqual(normalize_base_url("192.168.1.8:8765/"), "http://192.168.1.8:8765")
         self.assertEqual(normalize_base_url("http://192.168.124.112:8780/display"), "http://192.168.124.112:8780")

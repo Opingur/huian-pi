@@ -26,11 +26,11 @@
 
   最终状态语义：
   NORMAL：绿灯常亮；蜂鸣器静音。
-  WARNING：蓝灯常亮；每约2.2秒短鸣一次。
-  CROWD：黄灯闪烁；150ms 响 / 150ms 停，连续快速短鸣。
-  DANGER：红灯 200ms 快速闪烁；蜂鸣器持续长鸣。
+  WARNING：蓝灯 600ms 慢闪；每约2.2秒短鸣一次。
+  CROWD / DANGER：黄灯 250ms 快速闪烁；对应蜂鸣器节奏不变。
   FIRE：独立确认火情内部状态；红灯 200ms 快速闪烁；蜂鸣器持续长鸣。
-  COMM_TIMEOUT：紫灯 350ms 闪烁；蜂鸣器静音。
+  COMM_TIMEOUT：状态上报为通信超时；灯保持正常绿色，蜂鸣器静音。
+  PS2 一键报警：紫灯 120ms 快速闪烁；80ms 响 / 80ms 停，20 秒后自动恢复。
 
   注意：
   上述阈值用于当前演示测试，
@@ -47,15 +47,16 @@
 // 1. 成品最终 GPIO 映射
 // ==========================================================
 
-// 左 RGB —— 成品实测后的真实映射
-constexpr uint8_t LEFT_R = 32;
-constexpr uint8_t LEFT_G = 26;
-constexpr uint8_t LEFT_B = 27;
+// RGB 实测映射（逐 GPIO 点亮确认）
+// 左侧：D27 = 红，D32 = 绿，D26 = 蓝。
+constexpr uint8_t LEFT_R = 27;
+constexpr uint8_t LEFT_G = 32;
+constexpr uint8_t LEFT_B = 26;
 
-// 右 RGB —— 成品实测后的真实映射
-constexpr uint8_t RIGHT_R = 13;
-constexpr uint8_t RIGHT_G = 14;
-constexpr uint8_t RIGHT_B = 33;
+// 右侧：D33 = 红，D13 = 绿，D14 = 蓝。
+constexpr uint8_t RIGHT_R = 33;
+constexpr uint8_t RIGHT_G = 13;
+constexpr uint8_t RIGHT_B = 14;
 
 // 蜂鸣器
 constexpr uint8_t BUZZER_PIN = 25;
@@ -80,6 +81,8 @@ constexpr uint8_t MAX7219_CLK_PIN = 18;
 constexpr uint8_t MAX7219_CS_PIN = 19;
 constexpr uint8_t MAX7219_DEVICE_COUNT = 2;
 constexpr uint8_t MAX7219_INTENSITY = 3;
+constexpr uint8_t MAX7219_LEFT_DEVICE = 0;
+constexpr uint8_t MAX7219_RIGHT_DEVICE = 1;
 
 
 // ==========================================================
@@ -91,6 +94,11 @@ constexpr uint32_t BAUD = 115200;
 constexpr uint32_t VISION_TIMEOUT_MS = 5000UL;
 
 constexpr uint32_t MQ2_INTERVAL_MS = 500UL;
+constexpr uint32_t MQ2_WARMUP_MS = 120000UL;
+constexpr uint32_t MQ2_CALIBRATION_MS = 30000UL;
+constexpr uint32_t MQ2_STABLE_BASELINE_WINDOW_MS = 30000UL;
+constexpr uint16_t MQ2_STABLE_STEP_MAX = 10;
+constexpr uint16_t MQ2_CALIBRATION_SPREAD_MAX = 30;
 constexpr uint32_t DHT_INTERVAL_MS = 2500UL;
 constexpr uint32_t REPORT_INTERVAL_MS = 1000UL;
 
@@ -104,13 +112,21 @@ constexpr uint32_t MANUAL_ALARM_BUZZER_HALF_PERIOD_MS = 80UL;
 // 3. 当前演示测试阈值
 // ==========================================================
 
-constexpr uint16_t MQ2_TRIGGER_THRESHOLD = 300;
-constexpr uint16_t MQ2_RELEASE_THRESHOLD = 120;
+// MQ-2 uses a clean-air baseline. A normal warning needs about six seconds
+// of continuous abnormal readings; an exceptionally strong reading stays fast.
+constexpr uint16_t MQ2_TRIGGER_MIN_DELTA = 200;
+constexpr uint8_t MQ2_TRIGGER_PERCENT = 25;
+constexpr uint16_t MQ2_RELEASE_MIN_DELTA = 80;
+constexpr uint8_t MQ2_RELEASE_PERCENT = 10;
+constexpr uint16_t MQ2_SEVERE_MIN_DELTA = 600;
+constexpr uint8_t MQ2_SEVERE_PERCENT = 75;
 
-constexpr uint8_t MQ2_CONFIRM_SAMPLES = 3;
-constexpr uint8_t MQ2_RELEASE_SAMPLES = 3;
+constexpr uint8_t MQ2_CONFIRM_SAMPLES = 12;
+constexpr uint8_t MQ2_SEVERE_CONFIRM_SAMPLES = 3;
+constexpr uint8_t MQ2_RELEASE_SAMPLES = 10;
 
-constexpr float TEMP_FIRE_TEST_THRESHOLD = 35.0F;
+// DHT11 is an environmental display-only warning; it cannot trigger FIRE.
+constexpr float TEMP_WARNING_THRESHOLD_C = 35.0F;
 
 
 // ==========================================================
@@ -146,11 +162,24 @@ enum class ArrowDirection : uint8_t {
   RIGHT
 };
 
+enum class ArrowMode : uint8_t {
+  OFF,
+  LEFT_ONLY,
+  RIGHT_ONLY,
+  LEFT_FLASH,
+  RIGHT_FLASH,
+  BOTH_STEADY,
+  BOTH_FLASH
+};
+
 
 // ==========================================================
 
 struct VisionData {
 
+  // Global visual risk is presented on both RGB units. Side risks only add
+  // a lateral evacuation indication after Pi has real horizontal-flow proof.
+  RouteState global = RouteState::NORMAL;
   RouteState left = RouteState::NORMAL;
   RouteState right = RouteState::NORMAL;
 
@@ -173,9 +202,12 @@ struct VisionData {
   float smokeConfidence = 0.0F;
 
   bool fireConfirmed = false;
-  // Pi 明确给出分流方向时优先使用；未提供时固件再按两侧风险兜底。
+  // Paired exit-sign mode has priority. The legacy one-side direction remains
+  // accepted only so an older Pi version cannot accidentally light both signs.
   ArrowDirection recommendedDirection = ArrowDirection::NONE;
   bool recommendedDirectionProvided = false;
+  ArrowMode arrowMode = ArrowMode::OFF;
+  bool arrowModeProvided = false;
 
   uint32_t lastRxMs = 0;
 
@@ -190,6 +222,19 @@ struct VisionData {
 struct SensorData {
 
   uint16_t mq2Raw = 0;
+  uint16_t mq2Baseline = 0;
+  uint16_t mq2TriggerThreshold = 0;
+  uint16_t mq2ReleaseThreshold = 0;
+  uint16_t mq2SevereThreshold = 0;
+
+  bool mq2Ready = false;
+  uint32_t mq2StableSinceMs = 0;
+  uint32_t mq2CalibrationStartedMs = 0;
+  uint32_t mq2CalibrationSum = 0;
+  uint16_t mq2CalibrationMin = 4095;
+  uint16_t mq2CalibrationMax = 0;
+  uint16_t mq2CalibrationSamples = 0;
+  uint16_t mq2LastStableRaw = 0;
 
   bool smokeWarning = false;
 
@@ -238,7 +283,8 @@ bool lastButtonReading = HIGH;
 bool stableButtonState = HIGH;
 uint32_t lastButtonChangeMs = 0;
 
-ArrowDirection currentArrowDirection = ArrowDirection::NONE;
+ArrowMode currentArrowMode = ArrowMode::OFF;
+bool currentMatrixVisible = false;
 
 const byte ARROW_RIGHT[8] = {
   B00001000, B00001100, B00001110, B11111111,
@@ -412,10 +458,11 @@ bool stateBlinkOn(
 ) {
   switch (state) {
     case RouteState::NORMAL:
-    case RouteState::WARNING:
       return true;
+    case RouteState::WARNING:
+      return ((now / 600UL) % 2UL) == 0UL;
     case RouteState::CROWD:
-      return ((now / 350UL) % 2UL) == 0UL;
+      return ((now / 250UL) % 2UL) == 0UL;
     case RouteState::DANGER:
     case RouteState::FIRE:
       return ((now / 200UL) % 2UL) == 0UL;
@@ -438,7 +485,7 @@ void showLeftState(RouteState state) {
     case RouteState::NORMAL: setLeft(false, true, false); return;
     case RouteState::WARNING: setLeft(false, false, true); return;
     case RouteState::CROWD: setLeft(true, true, false); return;
-    case RouteState::DANGER:
+    case RouteState::DANGER: setLeft(true, false, false); return;
     case RouteState::FIRE: setLeft(true, false, false); return;
   }
 }
@@ -458,7 +505,7 @@ void showRightState(RouteState state) {
     case RouteState::NORMAL: setRight(false, true, false); return;
     case RouteState::WARNING: setRight(false, false, true); return;
     case RouteState::CROWD: setRight(true, true, false); return;
-    case RouteState::DANGER:
+    case RouteState::DANGER: setRight(true, false, false); return;
     case RouteState::FIRE: setRight(true, false, false); return;
   }
 }
@@ -502,6 +549,18 @@ ArrowDirection parseArrowDirection(const char* raw) {
   return ArrowDirection::NONE;
 }
 
+ArrowMode parseArrowMode(const char* raw) {
+  if (!raw) return ArrowMode::OFF;
+  String value(raw); value.trim(); value.toUpperCase();
+  if (value == "BOTH_STEADY") return ArrowMode::BOTH_STEADY;
+  if (value == "BOTH_FLASH") return ArrowMode::BOTH_FLASH;
+  if (value == "LEFT_ONLY") return ArrowMode::LEFT_ONLY;
+  if (value == "RIGHT_ONLY") return ArrowMode::RIGHT_ONLY;
+  if (value == "LEFT_FLASH") return ArrowMode::LEFT_FLASH;
+  if (value == "RIGHT_FLASH") return ArrowMode::RIGHT_FLASH;
+  return ArrowMode::OFF;
+}
+
 uint32_t manualAlarmRemainingMs() {
   if (!manualAlarm) return 0;
   const uint32_t elapsed = millis() - manualAlarmStartMs;
@@ -529,9 +588,10 @@ void updateManualAlarmButton() {
 }
 
 void showManualAlarm() {
+  // PS2 一键报警是独立现场提示：紫色（红 + 蓝）快速闪烁。
   const bool visible = ((millis() / MANUAL_ALARM_RGB_BLINK_MS) % 2UL) == 0UL;
-  setLeft(false, false, visible);
-  setRight(false, false, visible);
+  setLeft(visible, false, visible);
+  setRight(visible, false, visible);
 }
 
 constexpr uint8_t MAX7219_REG_DIGIT0 = 0x01;
@@ -550,12 +610,42 @@ void max7219WriteAll(uint8_t reg, uint8_t value) {
   digitalWrite(MAX7219_CS_PIN, HIGH);
 }
 
+void max7219WriteDevice(uint8_t selectedDevice, uint8_t reg, uint8_t value) {
+  digitalWrite(MAX7219_CS_PIN, LOW);
+  for (uint8_t device = 0; device < MAX7219_DEVICE_COUNT; ++device) {
+    shiftOut(MAX7219_DIN_PIN, MAX7219_CLK_PIN, MSBFIRST, reg);
+    shiftOut(
+      MAX7219_DIN_PIN,
+      MAX7219_CLK_PIN,
+      MSBFIRST,
+      device == selectedDevice ? value : 0x00
+    );
+  }
+  digitalWrite(MAX7219_CS_PIN, HIGH);
+}
+
 void clearMatrices() {
   for (uint8_t row = 0; row < 8; ++row) max7219WriteAll(MAX7219_REG_DIGIT0 + row, 0x00);
 }
 
-void drawArrowOnBoth(const byte pattern[8]) {
-  for (uint8_t row = 0; row < 8; ++row) max7219WriteAll(MAX7219_REG_DIGIT0 + row, pattern[row]);
+void drawArrowOnDevice(uint8_t device, const byte pattern[8]) {
+  clearMatrices();
+  for (uint8_t row = 0; row < 8; ++row) {
+    max7219WriteDevice(device, MAX7219_REG_DIGIT0 + row, pattern[row]);
+  }
+}
+
+void drawArrowPair(const byte leftPattern[8], const byte rightPattern[8]) {
+  clearMatrices();
+  for (uint8_t row = 0; row < 8; ++row) {
+    digitalWrite(MAX7219_CS_PIN, LOW);
+    for (uint8_t device = 0; device < MAX7219_DEVICE_COUNT; ++device) {
+      shiftOut(MAX7219_DIN_PIN, MAX7219_CLK_PIN, MSBFIRST, MAX7219_REG_DIGIT0 + row);
+      const byte value = device == MAX7219_LEFT_DEVICE ? leftPattern[row] : rightPattern[row];
+      shiftOut(MAX7219_DIN_PIN, MAX7219_CLK_PIN, MSBFIRST, value);
+    }
+    digitalWrite(MAX7219_CS_PIN, HIGH);
+  }
 }
 
 void initMatrices() {
@@ -627,6 +717,7 @@ bool parseVisionJson(
   const char* globalRisk =
     doc["vision_risk"] | "NORMAL";
 
+  vision.global = parseState(globalRisk);
 
   // 新字段指定“左/右出口”风险；保留旧字段兼容现有 JSON。
   const char* leftRisk = !doc["left_exit_risk"].isNull()
@@ -731,6 +822,10 @@ bool parseVisionJson(
   vision.recommendedDirection = vision.recommendedDirectionProvided
     ? parseArrowDirection(doc["recommended_direction"] | "NONE")
     : ArrowDirection::NONE;
+  vision.arrowModeProvided = !doc["arrow_mode"].isNull();
+  vision.arrowMode = vision.arrowModeProvided
+    ? parseArrowMode(doc["arrow_mode"] | "OFF")
+    : ArrowMode::OFF;
 
 
   // ---------- UART 在线 ----------
@@ -879,96 +974,148 @@ uint16_t readMq2RawAverage() {
 // 19. MQ-2 状态判断
 // ==========================================================
 
+void refreshMq2Thresholds() {
+
+  sensors.mq2TriggerThreshold =
+    sensors.mq2Baseline +
+    max(
+      MQ2_TRIGGER_MIN_DELTA,
+      static_cast<uint16_t>(
+        (static_cast<uint32_t>(sensors.mq2Baseline) * MQ2_TRIGGER_PERCENT) / 100UL
+      )
+    );
+
+  sensors.mq2ReleaseThreshold =
+    sensors.mq2Baseline +
+    max(
+      MQ2_RELEASE_MIN_DELTA,
+      static_cast<uint16_t>(
+        (static_cast<uint32_t>(sensors.mq2Baseline) * MQ2_RELEASE_PERCENT) / 100UL
+      )
+    );
+
+  sensors.mq2SevereThreshold =
+    sensors.mq2Baseline +
+    max(
+      MQ2_SEVERE_MIN_DELTA,
+      static_cast<uint16_t>(
+        (static_cast<uint32_t>(sensors.mq2Baseline) * MQ2_SEVERE_PERCENT) / 100UL
+      )
+    );
+}
+
+const char* mq2PhaseText() {
+  if (millis() < MQ2_WARMUP_MS) return "WARMUP";
+  if (!sensors.mq2Ready) return "CALIBRATING";
+  return "READY";
+}
+
+uint32_t mq2WarmupRemainingMs() {
+  const uint32_t elapsed = millis();
+  return elapsed >= MQ2_WARMUP_MS ? 0UL : MQ2_WARMUP_MS - elapsed;
+}
+
+uint32_t mq2CalibrationRemainingMs() {
+  if (sensors.mq2Ready) return 0UL;
+  const uint32_t now = millis();
+  if (now < MQ2_WARMUP_MS || sensors.mq2CalibrationStartedMs == 0UL) return MQ2_CALIBRATION_MS;
+  const uint32_t elapsed = now - sensors.mq2CalibrationStartedMs;
+  return elapsed >= MQ2_CALIBRATION_MS ? 0UL : MQ2_CALIBRATION_MS - elapsed;
+}
+
+void resetMq2Calibration(uint32_t now) {
+  sensors.mq2CalibrationStartedMs = now;
+  sensors.mq2CalibrationSum = 0;
+  sensors.mq2CalibrationMin = 4095;
+  sensors.mq2CalibrationMax = 0;
+  sensors.mq2CalibrationSamples = 0;
+}
+
 void updateMq2State() {
 
-  sensors.mq2Raw =
-    readMq2RawAverage();
+  sensors.mq2Raw = readMq2RawAverage();
+  const uint32_t now = millis();
 
-
-  // ======================================================
-  // 当前无烟雾状态
-  // ======================================================
-
-  if (
-    !sensors.smokeWarning
-  ) {
-
+  // The heater must settle before any calibration or alarm decision.
+  if (now < MQ2_WARMUP_MS) {
+    sensors.smokeWarning = false;
+    sensors.mq2HighCount = 0;
     sensors.mq2LowCount = 0;
-
-
-    if (
-      sensors.mq2Raw >=
-      MQ2_TRIGGER_THRESHOLD
-    ) {
-
-      if (
-        sensors.mq2HighCount <
-        MQ2_CONFIRM_SAMPLES
-      ) {
-
-        sensors.mq2HighCount++;
-      }
-
-
-      if (
-        sensors.mq2HighCount >=
-        MQ2_CONFIRM_SAMPLES
-      ) {
-
-        sensors.smokeWarning =
-          true;
-
-        sensors.mq2HighCount =
-          0;
-      }
-
-    } else {
-
-      sensors.mq2HighCount =
-        0;
-    }
+    sensors.mq2Ready = false;
+    return;
   }
 
+  // Build the initial baseline only from a continuous, low-variance clean-air window.
+  if (!sensors.mq2Ready) {
+    if (sensors.mq2CalibrationStartedMs == 0UL) resetMq2Calibration(now);
 
-  // ======================================================
-  // 当前已经进入烟雾状态
-  // ======================================================
+    sensors.mq2CalibrationSum += sensors.mq2Raw;
+    sensors.mq2CalibrationMin = min(sensors.mq2CalibrationMin, sensors.mq2Raw);
+    sensors.mq2CalibrationMax = max(sensors.mq2CalibrationMax, sensors.mq2Raw);
+    sensors.mq2CalibrationSamples++;
 
-  else {
-
-    sensors.mq2HighCount = 0;
-
-
-    if (
-      sensors.mq2Raw <=
-      MQ2_RELEASE_THRESHOLD
-    ) {
-
-      if (
-        sensors.mq2LowCount <
-        MQ2_RELEASE_SAMPLES
-      ) {
-
-        sensors.mq2LowCount++;
+    if (now - sensors.mq2CalibrationStartedMs >= MQ2_CALIBRATION_MS) {
+      const uint16_t spread = sensors.mq2CalibrationMax - sensors.mq2CalibrationMin;
+      if (sensors.mq2CalibrationSamples > 0 && spread <= MQ2_CALIBRATION_SPREAD_MAX) {
+        sensors.mq2Baseline =
+          static_cast<uint16_t>(sensors.mq2CalibrationSum / sensors.mq2CalibrationSamples);
+        sensors.mq2Ready = true;
+        sensors.mq2LastStableRaw = sensors.mq2Raw;
+        sensors.mq2StableSinceMs = now;
+        refreshMq2Thresholds();
+      } else {
+        // A changing environment is not a safe baseline: restart the clean-air window.
+        resetMq2Calibration(now);
       }
+    }
+    return;
+  }
 
+  // Baseline may move only after a long, quiet and non-alarming period.
+  const bool belowAlarmThreshold = sensors.mq2Raw < sensors.mq2TriggerThreshold;
+  const uint16_t step =
+    sensors.mq2Raw > sensors.mq2LastStableRaw
+      ? sensors.mq2Raw - sensors.mq2LastStableRaw
+      : sensors.mq2LastStableRaw - sensors.mq2Raw;
+  if (!sensors.smokeWarning && belowAlarmThreshold && step <= MQ2_STABLE_STEP_MAX) {
+    if (now - sensors.mq2StableSinceMs >= MQ2_STABLE_BASELINE_WINDOW_MS) {
+      // Slow 25% correction prevents a transient rise from lifting today's threshold.
+      sensors.mq2Baseline = static_cast<uint16_t>(
+        (static_cast<uint32_t>(sensors.mq2Baseline) * 3UL + sensors.mq2Raw) / 4UL
+      );
+      refreshMq2Thresholds();
+      sensors.mq2StableSinceMs = now;
+    }
+  } else {
+    sensors.mq2StableSinceMs = now;
+  }
+  sensors.mq2LastStableRaw = sensors.mq2Raw;
 
-      if (
-        sensors.mq2LowCount >=
-        MQ2_RELEASE_SAMPLES
-      ) {
-
-        sensors.smokeWarning =
-          false;
-
-        sensors.mq2LowCount =
-          0;
+  if (!sensors.smokeWarning) {
+    sensors.mq2LowCount = 0;
+    const bool severe = sensors.mq2Raw >= sensors.mq2SevereThreshold;
+    const bool abnormal = sensors.mq2Raw >= sensors.mq2TriggerThreshold;
+    if (abnormal) {
+      if (sensors.mq2HighCount < MQ2_CONFIRM_SAMPLES) sensors.mq2HighCount++;
+      const uint8_t required = severe ? MQ2_SEVERE_CONFIRM_SAMPLES : MQ2_CONFIRM_SAMPLES;
+      if (sensors.mq2HighCount >= required) {
+        sensors.smokeWarning = true;
+        sensors.mq2HighCount = 0;
       }
-
     } else {
-
-      sensors.mq2LowCount =
-        0;
+      sensors.mq2HighCount = 0;
+    }
+  } else {
+    sensors.mq2HighCount = 0;
+    if (sensors.mq2Raw <= sensors.mq2ReleaseThreshold) {
+      if (sensors.mq2LowCount < MQ2_RELEASE_SAMPLES) sensors.mq2LowCount++;
+      if (sensors.mq2LowCount >= MQ2_RELEASE_SAMPLES) {
+        sensors.smokeWarning = false;
+        sensors.mq2LowCount = 0;
+        sensors.mq2StableSinceMs = now;
+      }
+    } else {
+      sensors.mq2LowCount = 0;
     }
   }
 }
@@ -1044,7 +1191,7 @@ void updateSensors() {
 
       sensors.tempHigh =
         temperature >=
-        TEMP_FIRE_TEST_THRESHOLD;
+        TEMP_WARNING_THRESHOLD_C;
     }
   }
 }
@@ -1095,10 +1242,10 @@ void evaluateRisk() {
   if (online) {
 
     finalLeft =
-      vision.left;
+      maxState(vision.global, vision.left);
 
     finalRight =
-      vision.right;
+      maxState(vision.global, vision.right);
 
   } else {
 
@@ -1110,54 +1257,17 @@ void evaluateRisk() {
   }
 
 
-  fireEmergency =
-    false;
-
-
-  // ======================================================
-  // 2. 树莓派明确确认火情
-  // ======================================================
-
-  if (
+  // FIRE requires two continuous and independent confirmations:
+  // MQ-2 sustained smoke abnormality + Raspberry Pi visual fire confirmation.
+  // Temperature remains an environmental display value, never a standalone fire trigger.
+  const bool dualConfirmedFire =
     online &&
-    vision.fireConfirmed
-  ) {
-
-    fireEmergency =
-      true;
-  }
-
-
-  // ======================================================
-  // 3. ESP32 本地环境火情
-  //
-  // MQ-2 烟雾
-  // +
-  // DHT11 温度 >= 35℃
-  //
-  // 注意：
-  // 这条本地安全链不依赖树莓派在线。
-  // 即使 Pi 离线，只要满足条件，
-  // 仍然必须进入 FIRE。
-  // ======================================================
-
-  bool localEnvironmentFire =
-
+    sensors.mq2Ready &&
     sensors.smokeWarning &&
+    vision.fireConfirmed;
 
-    sensors.dhtValid &&
-
-    sensors.tempHigh;
-
-
-  if (
-    localEnvironmentFire
-  ) {
-
-    fireEmergency =
-      true;
-  }
-
+  fireEmergency =
+    dualConfirmedFire;
 
   // ======================================================
   // 4. 只有烟雾，没有达到 FIRE
@@ -1281,16 +1391,18 @@ void updateBuzzer() {
 // 25. MAX7219 左右分流箭头
 // ==========================================================
 
-ArrowDirection wantedArrowDirection() {
-  // 火情和人工报警期间不显示单侧引导，避免给出错误疏散含义。
-  if (fireEmergency || manualAlarm) return ArrowDirection::NONE;
-  if (piOnline() && vision.recommendedDirectionProvided) return vision.recommendedDirection;
-
-  const bool leftCrowded = stateRank(finalLeft) >= stateRank(RouteState::CROWD);
-  const bool rightCrowded = stateRank(finalRight) >= stateRank(RouteState::CROWD);
-  if (leftCrowded && !rightCrowded) return ArrowDirection::RIGHT;
-  if (rightCrowded && !leftCrowded) return ArrowDirection::LEFT;
-  return ArrowDirection::NONE;
+ArrowMode wantedArrowMode() {
+  // During fire or manual alarm, do not show an unverified evacuation route.
+  if (fireEmergency || manualAlarm) return ArrowMode::OFF;
+  if (!piOnline()) return ArrowMode::OFF;
+  if (vision.arrowModeProvided) return vision.arrowMode;
+  // Compatibility with old Pi messages that only contained one direction.
+  if (vision.recommendedDirectionProvided) {
+    return vision.recommendedDirection == ArrowDirection::LEFT ? ArrowMode::LEFT_ONLY
+      : vision.recommendedDirection == ArrowDirection::RIGHT ? ArrowMode::RIGHT_ONLY
+      : ArrowMode::OFF;
+  }
+  return ArrowMode::OFF;
 }
 
 const char* arrowText(ArrowDirection direction) {
@@ -1302,15 +1414,47 @@ const char* arrowText(ArrowDirection direction) {
   return "NONE";
 }
 
+ArrowDirection primaryArrowDirection(ArrowMode mode) {
+  if (mode == ArrowMode::LEFT_ONLY) return ArrowDirection::LEFT;
+  if (mode == ArrowMode::RIGHT_ONLY) return ArrowDirection::RIGHT;
+  return ArrowDirection::NONE;
+}
+
+const char* arrowModeText(ArrowMode mode) {
+  switch (mode) {
+    case ArrowMode::OFF: return "OFF";
+    case ArrowMode::LEFT_ONLY: return "LEFT_ONLY";
+    case ArrowMode::RIGHT_ONLY: return "RIGHT_ONLY";
+    case ArrowMode::LEFT_FLASH: return "LEFT_FLASH";
+    case ArrowMode::RIGHT_FLASH: return "RIGHT_FLASH";
+    case ArrowMode::BOTH_STEADY: return "BOTH_STEADY";
+    case ArrowMode::BOTH_FLASH: return "BOTH_FLASH";
+  }
+  return "OFF";
+}
+
+void drawArrowMode(ArrowMode mode, bool visible) {
+  if (!visible || mode == ArrowMode::OFF) {
+    clearMatrices();
+  } else if (mode == ArrowMode::LEFT_ONLY || mode == ArrowMode::LEFT_FLASH) {
+    drawArrowOnDevice(MAX7219_LEFT_DEVICE, ARROW_LEFT);
+  } else if (mode == ArrowMode::RIGHT_ONLY || mode == ArrowMode::RIGHT_FLASH) {
+    drawArrowOnDevice(MAX7219_RIGHT_DEVICE, ARROW_RIGHT);
+  } else {
+    drawArrowPair(ARROW_LEFT, ARROW_RIGHT);
+  }
+}
+
 void updateMatrices() {
-  const ArrowDirection wanted = wantedArrowDirection();
-  if (wanted == currentArrowDirection) return;
-  currentArrowDirection = wanted;
-  if (wanted == ArrowDirection::LEFT) drawArrowOnBoth(ARROW_LEFT);
-  else if (wanted == ArrowDirection::RIGHT) drawArrowOnBoth(ARROW_RIGHT);
-  else clearMatrices();
-  Serial.print("[MATRIX] direction=");
-  Serial.println(arrowText(currentArrowDirection));
+  const ArrowMode wanted = wantedArrowMode();
+  const bool flashing = wanted == ArrowMode::BOTH_FLASH || wanted == ArrowMode::LEFT_FLASH || wanted == ArrowMode::RIGHT_FLASH;
+  const bool visible = !flashing || ((millis() / 350UL) % 2UL) == 0UL;
+  if (wanted == currentArrowMode && visible == currentMatrixVisible) return;
+  currentArrowMode = wanted;
+  currentMatrixVisible = visible;
+  drawArrowMode(wanted, visible);
+  Serial.print("[MATRIX] mode=");
+  Serial.println(arrowModeText(currentArrowMode));
 }
 
 // ==========================================================
@@ -1522,9 +1666,10 @@ void printAndSendStatus() {
 
   Serial.println(
     (
+      piOnline() &&
+      sensors.mq2Ready &&
       sensors.smokeWarning &&
-      sensors.dhtValid &&
-      sensors.tempHigh
+      vision.fireConfirmed
     )
     ? "YES"
     : "NO"
@@ -1575,13 +1720,28 @@ void printAndSendStatus() {
     now;
 
 
-  // MQ-2
-
+  // MQ-2: publish the real baseline and phase for the Pi dashboard.
   reply["mq2_value"] =
     sensors.mq2Raw;
-
   reply["mq2_warning"] =
     sensors.smokeWarning;
+  reply["mq2_phase"] =
+    mq2PhaseText();
+  reply["mq2_ready"] =
+    sensors.mq2Ready;
+  reply["mq2_warmup_remaining_ms"] =
+    mq2WarmupRemainingMs();
+  reply["mq2_calibration_remaining_ms"] =
+    mq2CalibrationRemainingMs();
+  if (sensors.mq2Ready) {
+    reply["mq2_baseline"] = sensors.mq2Baseline;
+    reply["mq2_trigger_threshold"] = sensors.mq2TriggerThreshold;
+    reply["mq2_release_threshold"] = sensors.mq2ReleaseThreshold;
+  } else {
+    reply["mq2_baseline"] = nullptr;
+    reply["mq2_trigger_threshold"] = nullptr;
+    reply["mq2_release_threshold"] = nullptr;
+  }
 
 
   // DHT11
@@ -1625,11 +1785,12 @@ void printAndSendStatus() {
   reply["right_exit_state"] = stateText(finalRight);
   reply["left_exit_count"] = vision.leftCount;
   reply["right_exit_count"] = vision.rightCount;
-  reply["arrow_direction"] = arrowText(currentArrowDirection);
+  reply["arrow_direction"] = arrowModeText(currentArrowMode);
+  reply["arrow_mode"] = arrowModeText(currentArrowMode);
   reply["manual_alarm"] = manualAlarm;
   reply["manual_alarm_remaining_ms"] = manualAlarmRemainingMs();
   reply["manual_alarm_source"] = "PS2_BUTTON";
-  reply["recommended_direction"] = arrowText(currentArrowDirection);
+  reply["recommended_direction"] = arrowText(primaryArrowDirection(currentArrowMode));
 
 
   // 可以额外回传湿度
@@ -1814,11 +1975,11 @@ void setup() {
   );
 
   Serial.println(
-    " RGB mapping : FINAL PRODUCT"
+    " RGB mapping : L R27 G32 B26 / R R33 G13 B14"
   );
 
   Serial.println(
-    " Normal      : GREEN"
+    " NORMAL GREEN / WARNING BLUE / CROWD-DANGER YELLOW / MANUAL PURPLE / FIRE RED"
   );
 
   Serial.println(
@@ -1893,7 +2054,7 @@ void loop() {
   // RGB
   //
   // 优先级：
-  // FIRE > 人工报警 > COMM_TIMEOUT > 普通风险
+  // FIRE > 人工报警 > 普通风险
   // ======================================================
 
   if (
@@ -1913,12 +2074,6 @@ void loop() {
   ) {
 
     showManualAlarm();
-  } else if (
-    communicationOffline
-  ) {
-
-    showCommunicationOffline();
-
   } else {
 
     showLeftState(

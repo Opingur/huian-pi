@@ -43,6 +43,9 @@ _YELLOW = (255, 210, 60)
 _ORANGE = (255, 148, 35)
 _RED = (235, 82, 82)
 _PURPLE = (192, 92, 224)
+_RUNNING_BORDER_ORANGE = (0, 150, 255)
+_RUNNING_BORDER_THICKNESS = 6
+_RUNNING_BORDER_FLASH_SECONDS = 0.30
 
 
 def _cover_resize(image, width: int, height: int):
@@ -63,7 +66,15 @@ def _panel(canvas, x: int, y: int, width: int, height: int) -> None:
 def _value(source: object, name: str, default: object = None) -> object:
     if isinstance(source, Mapping):
         return source.get(name, default)
-    return getattr(source, name, default)
+    marker = object()
+    value = getattr(source, name, marker)
+    if value is not marker:
+        return value
+    # ESP32 optional status fields arrive through Esp32Status.extras.
+    extras = getattr(source, "extras", None)
+    if isinstance(extras, Mapping):
+        return extras.get(name, default)
+    return default
 
 
 def _number(value: object, default: float = 0.0) -> float:
@@ -91,11 +102,9 @@ def _current_candidate(context: Mapping[str, object]) -> bool:
 
 
 def _has_fire_evidence(status: Mapping[str, object], context: Mapping[str, object]) -> bool:
-    return bool(status.get("vision_fire_suspected")) or bool(status.get("fire_detected_raw")) or any(
-        isinstance(item, Mapping)
-        and str(item.get("class_name", "")).casefold() == "fire"
-        for item in context.get("fire_detections", []) or []
-    )
+    # Raw model hits are diagnostic only.  Public fire evidence starts after the
+    # tracker has observed a persistent candidate at the same location.
+    return bool(status.get("vision_fire_suspected")) or bool(status.get("fire_candidate_visible"))
 
 
 def _fused_fire(status: Mapping[str, object], context: Mapping[str, object]) -> bool:
@@ -106,13 +115,17 @@ def _fused_fire(status: Mapping[str, object], context: Mapping[str, object]) -> 
 def _fire_stage(status: Mapping[str, object], context: Mapping[str, object]) -> str:
     if _fused_fire(status, context):
         return "fused"
-    raw_or_current = bool(status.get("fire_detected_raw")) or _current_candidate(context)
-    # A stable alert becomes explicit "recent observation" only after a new inference misses.
-    if bool(status.get("recent_fire_evidence")) and not raw_or_current:
+    candidate_visible = bool(status.get("fire_candidate_visible"))
+    raw_fire = bool(status.get("fire_detected_raw"))
+    # A confirmed visual fire remains a current alert while the next inference
+    # is still hitting; after a miss it changes to the shorter "recent" hold.
+    if bool(status.get("vision_fire_suspected")) and raw_fire:
+        return "stable"
+    if bool(status.get("recent_fire_evidence")) and not candidate_visible:
         return "recent"
     if bool(status.get("vision_fire_suspected")):
         return "stable"
-    if raw_or_current:
+    if candidate_visible:
         return "candidate"
     if bool(status.get("recent_fire_evidence")):
         return "recent"
@@ -131,8 +144,10 @@ def _summary(status: Mapping[str, object], context: Mapping[str, object] | None 
         return "综合状态：疑似火情", _YELLOW
     if str(status.get("visual_alarm", "NONE")) == "RED" or str(status.get("vision_risk", "NORMAL")) == "DANGER":
         return "综合状态：拥挤危险", _RED
-    if str(status.get("visual_alarm", "NONE")) == "YELLOW" or str(status.get("vision_risk", "NORMAL")) in {"WARNING", "CROWD"}:
-        return "综合状态：拥挤预警", _YELLOW
+    if str(status.get("visual_alarm", "NONE")) == "YELLOW" or str(status.get("vision_risk", "NORMAL")) == "CROWD":
+        return "综合状态：拥挤报警", _YELLOW
+    if str(status.get("vision_risk", "NORMAL")) == "WARNING":
+        return "综合状态：拥挤预警", _BLUE
     return "综合状态：正常运行", _GREEN
 
 
@@ -169,7 +184,7 @@ def _render_video(frame, detections, status, conflict_zone, motions, display, co
 
 def _plot_bounds(rect):
     x, y, width, height = rect
-    return x + 42, x + width - 14, y + 46, y + height - 30
+    return x + 42, x + width - 14, y + 76, y + height - 30
 
 
 def _trend_points(history, status):
@@ -185,21 +200,33 @@ def _trend_points(history, status):
 def _draw_live_trend(canvas, status, context, entries: list) -> None:
     rect = (TREND_X, INFO_Y, TREND_WIDTH, INFO_HEIGHT)
     _panel(canvas, *rect)
-    entries.append(((TREND_X + 16, INFO_Y + 14), "\u8d8b\u52bf\u4e0e\u5b9e\u9a8c\u6807\u5b9a", _TEXT, 19))
+    entries.append(((TREND_X + 16, INFO_Y + 14), "\u4eba\u6d41\u8d8b\u52bf\u4e0e\u9884\u6d4b", _TEXT, 19))
     threshold = status.get("danger_people_threshold")
     calibrated = bool(status.get("crowd_calibrated", False)) and isinstance(threshold, int) and not isinstance(threshold, bool) and threshold > 0
     if calibrated:
-        entries.append(((TREND_X + TREND_WIDTH - 142, INFO_Y + 16), f"\u5b9e\u9a8c\u5371\u9669\u9608\u503c\uff1a{threshold}", _RED, 13))
-    else:
-        entries.append(((TREND_X + TREND_WIDTH - 174, INFO_Y + 16), "\u5b9e\u9a8c\u5371\u9669\u9608\u503c\uff1a\u5f85\u6807\u5b9a", _MUTED, 13))
-
-    if calibrated:
+        entries.append(((TREND_X + 16, INFO_Y + 40), f"\u5b9e\u9a8c\u53c2\u8003\u9608\u503c\uff1a{threshold}", _RED, 13))
         eta = status.get("time_to_danger")
-        eta_text = "预计达到实验危险阈值：--" if not isinstance(eta, (int, float)) else f"预计约 {float(eta):.1f} 秒达到实验阈值"
-        entries.append(((TREND_X + 16, INFO_Y + 36), eta_text, _MUTED, 12))
+        eta_text = "\u9884\u8ba1\u8fbe\u5230\u5b9e\u9a8c\u53c2\u8003\u9608\u503c\uff1a--" if not isinstance(eta, (int, float)) else f"\u9884\u8ba1\u7ea6 {float(eta):.1f} \u79d2\u8fbe\u5230\u5b9e\u9a8c\u9608\u503c"
+        entries.append(((TREND_X + 16, INFO_Y + 58), eta_text, _MUTED, 12))
     else:
-        entries.append(((TREND_X + 16, INFO_Y + 36), "预计达到实验危险阈值：--", _MUTED, 12))
-        entries.append(((TREND_X + 214, INFO_Y + 36), "需完成真实楼梯实验标定", _MUTED, 12))
+        # In exhibition mode, crowd risk is already decided by the live Crowd Index.
+        # A future research threshold must not make a live warning look unavailable.
+        entries.append(((TREND_X + 16, INFO_Y + 40), "\u5b9e\u65f6\u98ce\u9669\uff1aCrowd Index \u5224\u65ad", _YELLOW, 13))
+        current_risk = str(status.get("vision_risk", "NORMAL"))
+        if current_risk == "WARNING":
+            forecast_text = "\u5f53\u524d\u5df2\u8fdb\u5165\u62e5\u6324\u9884\u8b66"
+        elif current_risk == "CROWD":
+            forecast_text = "当前已进入拥挤报警"
+        elif current_risk == "DANGER":
+            forecast_text = "\u5f53\u524d\u5df2\u8fdb\u5165\u9ad8\u98ce\u9669\u72b6\u6001"
+        else:
+            eta = status.get("time_to_warning")
+            forecast_text = (
+                "\u9884\u8ba1\u7ea6 %.1f \u79d2\u8fdb\u5165\u62e5\u6324\u9884\u8b66" % float(eta)
+                if isinstance(eta, (int, float))
+                else "\u4eba\u6d41\u8d8b\u52bf\u6b63\u5728\u5b9e\u65f6\u5206\u6790"
+            )
+        entries.append(((TREND_X + 16, INFO_Y + 58), forecast_text, _MUTED, 12))
     real, forecast = _trend_points(context.get("prediction_history", []), status)
     left, right, top, bottom = _plot_bounds(rect)
     for index in range(4):
@@ -254,30 +281,46 @@ def _draw_live_trend(canvas, status, context, entries: list) -> None:
 def _crowd_state(status: Mapping[str, object]) -> tuple[str, tuple[int, int, int]]:
     if str(status.get("visual_alarm", "NONE")) == "RED" or str(status.get("vision_risk", "NORMAL")) == "DANGER":
         return "拥挤危险", _RED
-    if str(status.get("visual_alarm", "NONE")) == "YELLOW" or str(status.get("vision_risk", "NORMAL")) in {"WARNING", "CROWD"}:
-        return "拥挤预警", _YELLOW
+    if str(status.get("visual_alarm", "NONE")) == "YELLOW" or str(status.get("vision_risk", "NORMAL")) == "CROWD":
+        return "拥挤报警", _YELLOW
+    if str(status.get("vision_risk", "NORMAL")) == "WARNING":
+        return "拥挤预警", _BLUE
     return "暂无拥挤风险", _GREEN
 
 
+def _arrow_command(status: Mapping[str, object]) -> tuple[str, tuple[int, int, int]]:
+    """Translate the outgoing ESP32 command into a clear dashboard label."""
+    command = str(status.get("arrow_mode", "OFF")).strip().upper()
+    labels = {
+        "LEFT_ONLY": ("左侧常亮", _GREEN),
+        "RIGHT_ONLY": ("右侧常亮", _GREEN),
+        "LEFT_FLASH": ("左侧闪烁", _ORANGE),
+        "RIGHT_FLASH": ("右侧闪烁", _ORANGE),
+        "BOTH_STEADY": ("双侧常亮", _GREEN),
+        "BOTH_FLASH": ("双侧闪烁", _ORANGE),
+    }
+    return labels.get(command, ("未触发", _MUTED))
 def _draw_flow_card(canvas, status, entries: list) -> None:
-    """Show six live metrics in four calm rows, safely above the status bar."""
+    """Show live people-flow metrics and the outgoing arrow command."""
     _panel(canvas, FLOW_X, INFO_Y, FLOW_WIDTH, INFO_HEIGHT)
-    entries.append(((FLOW_X + 16, INFO_Y + 14), "人流监测", _TEXT, 19))
+    entries.append(((FLOW_X + 16, INFO_Y + 14), "\u4eba\u6d41\u76d1\u6d4b", _TEXT, 19))
     crowd_text, crowd_color = _crowd_state(status)
     running_count = _int(status.get("running_count"))
-    event_text = "检测到跑动" if bool(status.get("running_event")) else "正常通行"
+    event_text = "\u68c0\u6d4b\u5230\u8dd1\u52a8" if bool(status.get("running_event")) else "\u6b63\u5e38\u901a\u884c"
     event_color = _RED if running_count else crowd_color
+    arrow_text, arrow_color = _arrow_command(status)
     rows = (
-        (("当前人数", f"{_int(status.get('total_people'))} 人", _BLUE),
-         ("跟踪人数", f"{_int(status.get('tracked_people', status.get('total_people')))} 人", _BLUE)),
-        (("运动人数", f"{_int(status.get('moving_people'))} 人", _BLUE),
-         ("跑动人数", f"{running_count} 人", _RED if running_count else _GREEN)),
-        (("拥挤指数", f"{_number(status.get('crowd_index')):.2f}", _TEXT),
-         ("人流状态", crowd_text, crowd_color)),
-        (("当前事件", event_text, event_color), None),
+        (("\u5f53\u524d\u4eba\u6570", f"{_int(status.get('total_people'))} \u4eba", _BLUE),
+         ("\u8ddf\u8e2a\u4eba\u6570", f"{_int(status.get('tracked_people', status.get('total_people')))} \u4eba", _BLUE)),
+        (("\u8fd0\u52a8\u4eba\u6570", f"{_int(status.get('moving_people'))} \u4eba", _BLUE),
+         ("\u8dd1\u52a8\u4eba\u6570", f"{running_count} \u4eba", _RED if running_count else _GREEN)),
+        (("\u62e5\u6324\u6307\u6570", f"{_number(status.get('crowd_index')):.2f}", _TEXT),
+         ("\u4eba\u6d41\u72b6\u6001", crowd_text, crowd_color)),
+        (("\u5f53\u524d\u4e8b\u4ef6", event_text, event_color), None),
+        (("\u7bad\u5934\u6307\u4ee4", arrow_text, arrow_color), None),
     )
     for index, (left, right) in enumerate(rows):
-        y = INFO_Y + 48 + index * 33
+        y = INFO_Y + 48 + index * 31
         if index:
             cv2.line(canvas, (FLOW_X + 14, y - 9), (FLOW_X + FLOW_WIDTH - 14, y - 9), (61, 73, 87), 1)
         for column_x, item in ((FLOW_X + 16, left), (FLOW_X + 184, right)):
@@ -308,9 +351,18 @@ def _environment_rows(status: Mapping[str, object], context: Mapping[str, object
     else:
         mq2_warning = bool(_value(esp32, "mq2_warning", False))
         mq2_value = _value(esp32, "mq2_value")
-        mq2_state = "\u5f02\u5e38" if mq2_warning else "\u6b63\u5e38"
-        mq2_text = f"{_int(mq2_value)}\uff08{mq2_state}\uff09"
-        mq2_color = _RED if mq2_warning else _GREEN
+        mq2_ready = bool(_value(esp32, "mq2_ready", False))
+        mq2_baseline = _value(esp32, "mq2_baseline")
+        if not mq2_ready:
+            mq2_text = f"当前 {_int(mq2_value)}｜传感器稳定中"
+            mq2_color = _YELLOW
+        elif mq2_baseline is None:
+            mq2_text = f"当前 {_int(mq2_value)}｜等待环境基线"
+            mq2_color = _YELLOW
+        else:
+            mq2_state = "烟雾预警" if mq2_warning else "状态稳定"
+            mq2_text = f"当前 {_int(mq2_value)}｜环境基线 {_int(mq2_baseline)}｜{mq2_state}"
+            mq2_color = _BLUE if mq2_warning else _GREEN
         if not bool(_value(esp32, "temperature_valid", False)):
             temp_text, temp_color = "\u6570\u636e\u65e0\u6548", _YELLOW
         else:
@@ -360,6 +412,29 @@ def _draw_explain_bottom(canvas, status, display, context, entries: list) -> Non
             entries.append(((x + 18, INFO_Y + 52 + index * 27), line, _MUTED, 14))
 
 
+def _running_border_visible(status: Mapping[str, object]) -> bool:
+    """Use source time so the running alert flashes consistently on Pi and Windows."""
+    if not bool(status.get("running_event", False)):
+        return False
+    try:
+        source_time = float(status.get("source_time", 0.0))
+    except (TypeError, ValueError):
+        return True
+    return int(source_time / _RUNNING_BORDER_FLASH_SECONDS) % 2 == 0
+
+
+def _draw_running_border(canvas, status: Mapping[str, object]) -> None:
+    if not _running_border_visible(status):
+        return
+    cv2.rectangle(
+        canvas,
+        (3, 3),
+        (CANVAS_WIDTH - 4, CANVAS_HEIGHT - 4),
+        _RUNNING_BORDER_ORANGE,
+        _RUNNING_BORDER_THICKNESS,
+        cv2.LINE_AA,
+    )
+
 def draw_dashboard(frame, detections, status, conflict_zone=None, motions=None, display=None, ui_context=None):
     """Render the stable unified dashboard; input names never select a UI branch."""
     display = display or {}
@@ -370,8 +445,8 @@ def draw_dashboard(frame, detections, status, conflict_zone=None, motions=None, 
     fire_text, fire_color = _top_fire_text(status, context)
     # Restored lightweight overlay: no large header panel obscures the real monitoring image.
     entries: list = [
-        ((25, 20), "慧安安全监测系统", (0, 0, 0), 30),
-        ((23, 18), "慧安安全监测系统", _TITLE_YELLOW, 30),
+        ((25, 20), "慧眼疏流安全检测系统", (0, 0, 0), 30),
+        ((23, 18), "慧眼疏流安全检测系统", _TITLE_YELLOW, 30),
         ((25, 61), fire_text, (0, 0, 0), 21),
         ((23, 59), fire_text, fire_color, 21),
     ]
@@ -383,7 +458,8 @@ def draw_dashboard(frame, detections, status, conflict_zone=None, motions=None, 
         _draw_safety_card(canvas, status, context, entries)
     summary_text, summary_color = _summary(status, context)
     cv2.rectangle(canvas, (0, STATUS_Y), (CANVAS_WIDTH, CANVAS_HEIGHT), (8, 84, 185), -1)
-    cv2.circle(canvas, (34, STATUS_Y + STATUS_HEIGHT // 2), 10, tuple(reversed(summary_color)), -1)
+    cv2.circle(canvas, (34, STATUS_Y + STATUS_HEIGHT // 2), 10, summary_color, -1)
     entries.append(((56, STATUS_Y + 12), summary_text, _TEXT, 21))
+    _draw_running_border(canvas, status)
     font_path = options.get("font_path")
     return _draw_text(canvas, entries, str(font_path) if font_path else None, int(options["font_size"]))

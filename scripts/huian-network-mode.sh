@@ -5,6 +5,7 @@ set -euo pipefail
 DEVICE="${HUIAN_WIFI_DEVICE:-wlan0}"
 DEV_CONNECTION="${HUIAN_DEV_CONNECTION:-MAGO2_5G}"
 SHOW_CONNECTION="${HUIAN_SHOW_CONNECTION:-Huian_Loudao}"
+SHOWCASE_ADDRESS="${HUIAN_SHOWCASE_ADDRESS:-192.168.50.1/24}"
 FALLBACK_UNIT="huian-network-show-fallback"
 ROLLBACK_SECONDS="${HUIAN_SHOW_ROLLBACK_SECONDS:-180}"
 
@@ -32,6 +33,8 @@ show_status() {
   echo
   echo "Configured profiles:"
   nmcli --terse --fields NAME,TYPE,AUTOCONNECT connection show | grep --extended-regexp "^(${DEV_CONNECTION}|${SHOW_CONNECTION}):" || true
+  echo
+  echo "Showcase hotspot: ${SHOW_CONNECTION}  (Pi address: ${SHOWCASE_ADDRESS})"
 }
 
 activate_development() {
@@ -54,8 +57,10 @@ activate_showcase() {
   fi
   nmcli connection modify "${DEV_CONNECTION}" connection.autoconnect no
   nmcli connection modify "${SHOW_CONNECTION}" connection.autoconnect yes
+  # A fixed shared address lets packaged display clients connect directly.
+  nmcli connection modify "${SHOW_CONNECTION}" ipv4.method shared ipv4.addresses "${SHOWCASE_ADDRESS}"
   nmcli connection up "${SHOW_CONNECTION}" ifname "${DEVICE}"
-  echo "Showcase hotspot enabled: ${SHOW_CONNECTION}"
+  echo "Showcase hotspot enabled: ${SHOW_CONNECTION} (use http://${SHOWCASE_ADDRESS%/*}:8780)"
 }
 
 confirm_showcase() {

@@ -82,25 +82,10 @@ class TeachingConsoleApp(tk.Tk):
         self.show_display()
 
     def _build_display_shell(self) -> None:
-        """Prepare the default white presentation surface and quiet experiment exit."""
+        """Prepare the fixed presentation surface for the packaged showcase."""
         self.display_shell = tk.Frame(self, background="#f6f7f8", highlightthickness=0)
         self.showcase_page = ShowcasePage(self.display_shell, self.root_path)
         self.showcase_page.pack(fill="both", expand=True)
-        switch = tk.Label(
-            self.display_shell,
-            text="切换到实验",
-            foreground="#78838d",
-            background="#f6f7f8",
-            activeforeground="#c96b08",
-            activebackground="#f6f7f8",
-            cursor="hand2",
-            font=("Segoe UI", 9),
-            takefocus=True,
-        )
-        self.display_switch = switch
-        switch.place(relx=0.0, rely=1.0, x=16, y=-14, anchor="sw")
-        for event in ("<Button-1>", "<Return>", "<space>"):
-            switch.bind(event, lambda _event: self.show_experiments())
 
     def _toggle_showcase_fullscreen_event(self, _event=None):
         if self.display_shell.winfo_manager() == "pack":
@@ -122,10 +107,6 @@ class TeachingConsoleApp(tk.Tk):
             return
         self._showcase_fullscreen = target
         self.attributes("-fullscreen", target)
-        if target:
-            self.display_switch.place_forget()
-        else:
-            self.display_switch.place(relx=0.0, rely=1.0, x=16, y=-8, anchor="sw")
         self.showcase_page.set_fullscreen(target)
 
     def show_display(self) -> None:

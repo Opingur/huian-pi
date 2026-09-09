@@ -20,6 +20,7 @@ UART_FIELDS = (
     "left_exit_count",
     "right_exit_count",
     "recommended_direction",
+    "arrow_mode",
     "direction_conflict",
     "vision_fire_suspected",
     "fire_confirmed",
@@ -63,7 +64,7 @@ ESP32_WEB_OPTIONAL_FIELDS = (
     "mq2_release_threshold", "humidity_percent", "manual_alarm",
     "manual_alarm_remaining_ms", "manual_alarm_source", "recommended_direction",
     "left_exit_state", "right_exit_state", "left_exit_count", "right_exit_count",
-    "arrow_direction",
+    "arrow_direction", "arrow_mode",
 )
 
 
@@ -96,6 +97,7 @@ def build_uart_payload(status: Mapping[str, object]) -> dict[str, object]:
         "left_exit_count": int(status.get("left_exit_count", status.get("left_people", 0))),
         "right_exit_count": int(status.get("right_exit_count", status.get("right_people", 0))),
         "recommended_direction": str(status.get("recommended_direction", "NONE")),
+        "arrow_mode": str(status.get("arrow_mode", "OFF")),
         "direction_conflict": bool(status.get("direction_conflict", False)),
         "vision_fire_suspected": bool(status.get("vision_fire_suspected", False)),
         "fire_confirmed": bool(status.get("fire_confirmed", False)),

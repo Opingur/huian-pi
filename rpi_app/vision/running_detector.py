@@ -12,10 +12,27 @@ from dataclasses import dataclass
 from math import hypot
 from typing import Mapping
 
+# Windows showcase only: detect steady running in distant or low-resolution video
+# without weakening the Raspberry Pi's formal live-monitoring configuration.
+SHOWCASE_RUNNING_DETECTION_PROFILE = {
+    "window_seconds": 0.8,
+    "enter_threshold": 0.9,
+    "exit_threshold": 0.55,
+    "confirm_seconds": 0.25,
+    "release_seconds": 0.5,
+    "minimum_track_history": 0.35,
+    "max_sample_speed": 5.5,
+    "max_sample_gap_seconds": 1.0,
+    "max_scale_change_ratio": 1.55,
+    "pixel_enter_threshold": 135.0,
+    "pixel_exit_threshold": 95.0,
+    "minimum_high_speed_samples": 2,
+}
 
 @dataclass
 class _TrackState:
     samples: deque[tuple[float, float, float, float]]
+    high_evidence_times: deque[float]
     high_since: float | None = None
     low_since: float | None = None
     running: bool = False
@@ -41,6 +58,7 @@ class RunningDetector:
         # Direct pixel speed complements normalised speed for close-range demos.
         self.pixel_enter_threshold = float(settings.get("pixel_enter_threshold", 220.0))
         self.pixel_exit_threshold = float(settings.get("pixel_exit_threshold", 160.0))
+        self.minimum_high_speed_samples = int(settings.get("minimum_high_speed_samples", 1))
         if min(self.window_seconds, self.enter_threshold, self.exit_threshold, self.confirm_seconds, self.minimum_track_history) <= 0:
             raise ValueError("running_detection thresholds must be positive")
         if self.exit_threshold >= self.enter_threshold:
@@ -49,12 +67,16 @@ class RunningDetector:
             raise ValueError("running_detection pixel thresholds must be non-negative and enter must be positive")
         if self.pixel_exit_threshold >= self.pixel_enter_threshold:
             raise ValueError("running_detection.pixel_exit_threshold must be lower than pixel_enter_threshold")
+        if self.minimum_high_speed_samples < 1:
+            raise ValueError("running_detection.minimum_high_speed_samples must be at least 1")
         self._tracks: dict[int, _TrackState] = {}
 
     @staticmethod
     def _sample(track: Mapping[str, object], source_time: float) -> tuple[float, float, float, float]:
         x1, y1, x2, y2 = (float(track[name]) for name in ("x1", "y1", "x2", "y2"))
-        return source_time, (x1 + x2) / 2.0, (y1 + y2) / 2.0, max(1.0, y2 - y1)
+        anchor_x = float(track.get("anchor_x", (x1 + x2) / 2.0))
+        anchor_y = float(track.get("anchor_y", y2))
+        return source_time, anchor_x, anchor_y, max(1.0, y2 - y1)
 
     @staticmethod
     def _speed(samples: deque[tuple[float, float, float, float]]) -> float:
@@ -85,7 +107,7 @@ class RunningDetector:
         for track in tracks:
             track_id = int(track["track_id"])
             seen.add(track_id)
-            state = self._tracks.setdefault(track_id, _TrackState(deque()))
+            state = self._tracks.setdefault(track_id, _TrackState(deque(), deque()))
             sample = self._sample(track, source_time)
             if not state.samples or sample[0] > state.samples[-1][0]:
                 if state.samples:
@@ -112,12 +134,22 @@ class RunningDetector:
             if history_seconds < self.minimum_track_history:
                 state.high_since = None
                 state.low_since = None
+                state.high_evidence_times.clear()
             elif not state.running:
                 state.low_since = None
                 state.high_since = source_time if above_enter and state.high_since is None else state.high_since
                 if not above_enter:
                     state.high_since = None
-                if state.high_since is not None and source_time - state.high_since >= self.confirm_seconds:
+                    state.high_evidence_times.clear()
+                elif not state.high_evidence_times or state.high_evidence_times[-1] != source_time:
+                    state.high_evidence_times.append(source_time)
+                while state.high_evidence_times and state.high_evidence_times[0] < cutoff:
+                    state.high_evidence_times.popleft()
+                if (
+                    state.high_since is not None
+                    and source_time - state.high_since >= self.confirm_seconds
+                    and len(state.high_evidence_times) >= self.minimum_high_speed_samples
+                ):
                     state.running = True
                     state.running_since = state.high_since
                     state.low_since = None

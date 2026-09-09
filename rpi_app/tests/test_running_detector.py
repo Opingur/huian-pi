@@ -1,6 +1,6 @@
 import unittest
 
-from vision.running_detector import RunningDetector, aggregate_running
+from vision.running_detector import SHOWCASE_RUNNING_DETECTION_PROFILE, RunningDetector, aggregate_running
 
 
 def track(x, *, track_id=7, height=100):
@@ -46,6 +46,26 @@ class RunningDetectorTests(unittest.TestCase):
         self.assertTrue(result["running"])
         self.assertGreater(result["pixel_speed"], 180)
 
+    def test_showcase_profile_detects_sustained_distant_running(self):
+        """The scaled low-resolution showcase must still flag a stable runner."""
+        detector = RunningDetector(SHOWCASE_RUNNING_DETECTION_PROFILE)
+        for timestamp, x in ((0.0, 0), (0.2, 30), (0.4, 62), (0.6, 94), (0.8, 126)):
+            result = detector.update([track(x, height=150)], timestamp)[7]
+        self.assertTrue(result["running"])
+
+    def test_showcase_profile_does_not_flag_stable_walking(self):
+        """Smooth walking is below the running profile even after several samples."""
+        detector = RunningDetector(SHOWCASE_RUNNING_DETECTION_PROFILE)
+        for timestamp, x in ((0.0, 0), (0.2, 22), (0.4, 44), (0.6, 66), (0.8, 88), (1.0, 110)):
+            result = detector.update([track(x, height=150)], timestamp)[7]
+        self.assertFalse(result["running"])
+
+    def test_showcase_profile_requires_repeated_high_speed_evidence(self):
+        """One noisy high-speed displacement must not immediately make a runner."""
+        detector = RunningDetector(SHOWCASE_RUNNING_DETECTION_PROFILE)
+        detector.update([track(0, height=150)], 0.0)
+        result = detector.update([track(36, height=150)], 0.2)[7]
+        self.assertFalse(result["running"])
     def test_exit_hysteresis_and_multiple_ids(self):
         for time, x in ((0.0, 0), (0.3, 40), (0.6, 80), (0.9, 120)):
             self.update(time, x)

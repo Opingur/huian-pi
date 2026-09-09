@@ -32,6 +32,6 @@ def fire_status_text(status) -> tuple[str, tuple[int, int, int]]:
         return "视觉火情：未接入", (180, 180, 180)
     if status.get("vision_fire_suspected"):
         return "视觉火情：已发现火焰", FIRE_COLOR
-    if status.get("fire_detected_raw"):
+    if status.get("fire_candidate_visible"):
         return "视觉火情：疑似火焰", (0, 210, 255)
     return "视觉火情：未发现", (80, 180, 80)

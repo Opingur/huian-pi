@@ -18,6 +18,21 @@ RISK_ZH = {
     "CROWD": "拥挤",
     "DANGER": "危险",
 }
+_RUNNING_BORDER_ORANGE = (0, 150, 255)
+
+
+def _draw_running_border(image, status: Mapping[str, object]) -> None:
+    if not bool(status.get("running_event", False)):
+        return
+    try:
+        source_time = float(status.get("source_time", 0.0))
+    except (TypeError, ValueError):
+        source_time = 0.0
+    if int(source_time / 0.30) % 2:
+        return
+    height, width = image.shape[:2]
+    cv2.rectangle(image, (3, 3), (width - 4, height - 4), _RUNNING_BORDER_ORANGE, 6, cv2.LINE_AA)
+
 ALARM_ZH = {
     "NONE": "无",
     "YELLOW": "黄色预警",
@@ -91,7 +106,7 @@ def _panel_entries(status: Mapping[str, object]):
     }.get(risk, (255, 255, 255))
     alarm_color = (255, 80, 80) if alarm == "RED" else (255, 220, 0) if alarm == "YELLOW" else (255, 255, 255)
     entries = [
-        ((30, 28), "慧安安全监测系统", (255, 255, 255), 26),
+        ((30, 28), "慧眼疏流安全检测系统", (255, 255, 255), 26),
         ((30, 68), f"当前人数：{int(status['total_people'])} 人", (255, 255, 255), 23),
         ((30, 102), f"风险等级：{RISK_ZH.get(risk, risk)}", risk_color, 23),
         ((30, 136), f"拥挤指数：{float(status['crowd_index']):.2f}", (255, 255, 255), 23),
@@ -155,11 +170,13 @@ def draw_dashboard(
         x1, y1 = int(detection["x1"]), int(detection["y1"])
         x2, y2 = int(detection["x2"]), int(detection["y2"])
         center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
-        box_color = (255, 0, 0) if center_x < middle else (0, 0, 255)
-        cv2.rectangle(image, (x1, y1), (x2, y2), box_color, 2)
+        track_id = int(detection.get("track_id", -1))
+        running = bool(motions.get(track_id, {}).get("running", False))
+        box_color = (60, 60, 235) if running else ((255, 0, 0) if center_x < middle else (0, 0, 255))
+        cv2.rectangle(image, (x1, y1), (x2, y2), box_color, 5 if running else 2)
         cv2.circle(image, (center_x, center_y), 4, box_color, -1)
-        entries.append(((x1, max(2, y1 - 25)), f"人员 {float(detection['confidence']):.2f}", (255, 255, 255), 18))
-
+        label = f"编号 {track_id} 跑动" if running else f"人员 {float(detection['confidence']):.2f}"
+        entries.append(((x1, max(2, y1 - 25)), label, (255, 255, 255), 18))
     for track_id, motion in motions.items():
         pixels = [(int(x * width), int(y * height)) for _, x, y in motion.get("trail", [])]
         for first, second in zip(pixels, pixels[1:]):
@@ -184,4 +201,5 @@ def draw_dashboard(
                 ((25, height - 189), f"跟踪人数：{status.get('tracked_people', status['total_people'])}", (255, 255, 255), 18),
                 ((25, height - 162), f"运动人数：{status.get('moving_people', 0)}", (255, 255, 255), 18),
             ])
+    _draw_running_border(image, status)
     return _draw_text(image, entries, font_path, font_size)

@@ -87,12 +87,37 @@ class FireDetectorTests(unittest.TestCase):
         self.assertEqual(detector.model.calls, [(120, 120)])
         self.assertEqual(result["inference_sources"], ["full"])
 
-    def test_two_hits_in_five_inferences_confirms_fire(self):
-        tracker = FireEvidenceTracker({"confirmation_hits": 2, "confirmation_window": 5, "bbox_hold_seconds": 3.0, "visual_alert_hold_seconds": 6.0}, True)
+    def test_single_raw_detection_is_hidden_until_it_repeats_in_the_same_place(self):
+        tracker = FireEvidenceTracker({"candidate_display_hits": 2, "confirmation_hits": 3}, True)
         tracker.record(evidence_result(True), 0.0)
-        tracker.record(evidence_result(False), 1.0)
-        tracker.record(evidence_result(True), 2.0)
-        self.assertTrue(tracker.status(2.0)["vision_fire_suspected"])
+        status = tracker.status(0.0)
+        self.assertTrue(status["fire_detected_raw"])
+        self.assertFalse(status["fire_candidate_visible"])
+        self.assertFalse(status["vision_fire_suspected"])
+        self.assertEqual(status["fire_display_detections"], [])
+
+    def test_different_fire_boxes_do_not_accumulate_into_a_confirmation(self):
+        tracker = FireEvidenceTracker({"candidate_display_hits": 2, "confirmation_hits": 2, "confirmation_iou_threshold": 0.35}, True)
+        tracker.record(evidence_result(True, [{"class_name": "fire", "confidence": 0.61, "bbox": [10, 20, 40, 70], "source": "full"}]), 0.0)
+        tracker.record(evidence_result(True, [{"class_name": "fire", "confidence": 0.72, "bbox": [120, 20, 150, 70], "source": "full"}]), 1.0)
+        status = tracker.status(1.0)
+        self.assertFalse(status["fire_candidate_visible"])
+        self.assertFalse(status["vision_fire_suspected"])
+        self.assertFalse(status["fire_confirmed"])
+
+    def test_same_location_consecutive_hits_become_visible_then_confirmed(self):
+        tracker = FireEvidenceTracker({"candidate_display_hits": 2, "confirmation_hits": 3, "confirmation_iou_threshold": 0.35}, True)
+        first = [{"class_name": "fire", "confidence": 0.61, "bbox": [10, 20, 50, 80], "source": "full"}]
+        second = [{"class_name": "fire", "confidence": 0.66, "bbox": [12, 22, 52, 82], "source": "full"}]
+        third = [{"class_name": "fire", "confidence": 0.70, "bbox": [11, 21, 51, 81], "source": "full"}]
+        tracker.record(evidence_result(True, first), 0.0)
+        tracker.record(evidence_result(True, second), 1.0)
+        candidate = tracker.status(1.0)
+        self.assertTrue(candidate["fire_candidate_visible"])
+        self.assertFalse(candidate["fire_confirmed"])
+        self.assertEqual(candidate["fire_display_detections"][0]["bbox"], [12, 22, 52, 82])
+        tracker.record(evidence_result(True, third), 2.0)
+        self.assertTrue(tracker.status(2.0)["fire_confirmed"])
 
     def test_three_consecutive_hits_confirm_fire_but_one_or_two_do_not(self):
         tracker = FireEvidenceTracker({"confirmation_hits": 3, "confirmation_window": 3}, True)

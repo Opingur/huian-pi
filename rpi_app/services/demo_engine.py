@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping
 import cv2
 
 from rpi_app.communication.esp32 import ESP32Publisher, build_uart_payload
+from rpi_app.decision.evacuation_guidance import exit_guidance
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,11 @@ class DemoEngine:
     def _send(self, event: Mapping[str, object], position: float) -> None:
         payload = normal_demo_status()
         payload.update(event)
+        # An old pre-rendered case has no trajectory direction in events.jsonl.
+        # Never invent one from its crowd fields; replay it with arrows off.
+        # A raw-video showcase runs the live processor and has the required data.
+        if "arrow_mode" not in event:
+            payload.update({"recommended_direction": "NONE", "arrow_mode": "OFF"})
         payload["timestamp"] = int(round(float(position) * 1000.0))
         self._latest_status = dict(payload)
         self.publisher.send_status(payload, source_timestamp=float(position))

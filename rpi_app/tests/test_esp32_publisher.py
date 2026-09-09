@@ -12,7 +12,7 @@ class Esp32PublisherTests(unittest.TestCase):
             "protocol_version": 1, "timestamp": 123, "vision_risk": "DANGER", "crowd_index": 0.83,
             "total_people": 16, "direction_conflict": True,
             "left_exit_risk": "CROWD", "right_exit_risk": "NORMAL",
-            "left_exit_count": 6, "right_exit_count": 1, "recommended_direction": "RIGHT",
+            "left_exit_count": 6, "right_exit_count": 1, "recommended_direction": "RIGHT", "arrow_mode": "BOTH_FLASH",
             "vision_fire_suspected": True, "fire_confirmed": True, "vision_smoke_suspected": False,
             "vision_fire_confidence": 0.82, "vision_smoke_confidence": 0.0,
             "bbox": [1, 2, 3, 4], "flow_groups": [{"id": 1}], "predicted_people_10s": 20,
@@ -24,6 +24,7 @@ class Esp32PublisherTests(unittest.TestCase):
         payload = build_uart_payload(self.status)
         self.assertEqual(payload["left_exit_risk"], "CROWD")
         self.assertEqual(payload["recommended_direction"], "RIGHT")
+        self.assertEqual(payload["arrow_mode"], "BOTH_FLASH")
 
     def test_message_is_compact_json_with_one_newline(self):
         message = encode_uart_message(self.status)

@@ -12,7 +12,7 @@ from ui.chinese_display import ALARM_ZH, RISK_ZH, _draw_text
 
 MODE_DEFAULTS = {
     "prediction": {
-        "title": "慧安安全监测系统",
+        "title": "慧眼疏流安全检测系统",
         "show_boxes": True,
         "show_track_id": True,
         "show_trajectory": True,
@@ -20,7 +20,7 @@ MODE_DEFAULTS = {
         "show_conflict_zone": False,
     },
     "direction": {
-        "title": "慧安安全监测系统",
+        "title": "慧眼疏流安全检测系统",
         "show_boxes": True,
         "show_track_id": True,
         "show_trajectory": True,
@@ -28,7 +28,7 @@ MODE_DEFAULTS = {
         "show_conflict_zone": False,
     },
     "convergence": {
-        "title": "慧安安全监测系统",
+        "title": "慧眼疏流安全检测系统",
         "show_boxes": True,
         "show_track_id": True,
         "show_trajectory": True,
@@ -36,7 +36,7 @@ MODE_DEFAULTS = {
         "show_conflict_zone": True,
     },
     "live": {
-        "title": "慧安安全监测系统",
+        "title": "慧眼疏流安全检测系统",
         "show_boxes": True,
         "show_track_id": True,
         "show_trajectory": True,
@@ -48,6 +48,21 @@ MODE_DEFAULTS = {
 
 MODE_DEFAULTS["explain"] = dict(MODE_DEFAULTS["direction"])
 MODE_DEFAULTS["validation"] = dict(MODE_DEFAULTS["explain"])
+
+_RUNNING_BORDER_ORANGE = (0, 150, 255)
+
+
+def _draw_running_border(image, status: Mapping[str, object]) -> None:
+    if not bool(status.get("running_event", False)):
+        return
+    try:
+        source_time = float(status.get("source_time", 0.0))
+    except (TypeError, ValueError):
+        source_time = 0.0
+    if int(source_time / 0.30) % 2:
+        return
+    height, width = image.shape[:2]
+    cv2.rectangle(image, (3, 3), (width - 4, height - 4), _RUNNING_BORDER_ORANGE, 6, cv2.LINE_AA)
 
 def _options(display: Mapping[str, object] | None) -> dict[str, object]:
     display = display or {}
@@ -154,10 +169,13 @@ def _draw_tracks(image, detections, motions, options, text_entries):
         for detection in detections:
             x1, y1 = int(detection["x1"]), int(detection["y1"])
             x2, y2 = int(detection["x2"]), int(detection["y2"])
-            color = (255, 0, 0) if (x1 + x2) // 2 < middle else (0, 0, 255)
-            cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+            track_id = int(detection.get("track_id", -1))
+            running = bool(motions.get(track_id, {}).get("running", False))
+            color = (60, 60, 235) if running else ((255, 0, 0) if (x1 + x2) // 2 < middle else (0, 0, 255))
+            cv2.rectangle(image, (x1, y1), (x2, y2), color, 5 if running else 2)
             cv2.circle(image, ((x1 + x2) // 2, (y1 + y2) // 2), 4, color, -1)
-            text_entries.append(((x1, max(2, y1 - 25)), f"人员 {float(detection['confidence']):.2f}", (255, 255, 255), 18))
+            label = f"编号 {track_id} 跑动" if running else f"人员 {float(detection['confidence']):.2f}"
+            text_entries.append(((x1, max(2, y1 - 25)), label, (255, 255, 255), 18))
     for track_id, motion in motions.items():
         pixels = [(int(x * width), int(y * height)) for _, x, y in motion.get("trail", [])]
         if options["show_trajectory"]:
@@ -195,5 +213,6 @@ def draw_dashboard(frame, detections, status, conflict_zone=None, motions=None, 
     image = cv2.addWeighted(panel, 0.72, image, 0.28, 0)
     _draw_conflict_zone(image, conflict_zone, options, entries)
     _draw_tracks(image, detections, motions, options, entries)
+    _draw_running_border(image, status)
     path = options["font_path"]
     return _draw_text(image, entries, str(path) if path else None, int(options["font_size"]))

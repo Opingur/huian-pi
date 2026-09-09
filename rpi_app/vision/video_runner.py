@@ -14,7 +14,7 @@ import cv2
 from communication.esp32 import ESP32Publisher
 from decision.alarm import AlarmDebouncer
 from decision.crowd_index import calculate_crowd_index
-from decision.evacuation_guidance import exit_guidance
+from decision.evacuation_guidance import DominantFlowGuidance, exit_guidance
 from decision.crowd_predictor import CrowdPredictor
 from decision.flow_analysis import FlowRiskAnalyzer
 from decision.risk_engine import RiskEngine
@@ -42,23 +42,23 @@ def _write_summary(path: Path, summary: dict[str, object]) -> None:
 
 
 def _apply_flow_risk(base_risk: str, flow_metrics: dict[str, object]) -> str:
-    """All people-flow risks use CROWD; fire is a separate ESP32 safety path."""
+    """Keep routine crowd warnings distinct from a confirmed crowd alarm."""
     if flow_metrics.get("convergence_risk"):
         return "CROWD"
-    if (
-        base_risk in {"WARNING", "CROWD", "DANGER"}
-        or flow_metrics.get("single_flow_crowd_risk")
-        or flow_metrics.get("predicted_single_flow_warning")
-    ):
+    if base_risk in {"CROWD", "DANGER"}:
         return "CROWD"
+    if base_risk == "WARNING" or flow_metrics.get("single_flow_crowd_risk") or flow_metrics.get("predicted_single_flow_warning"):
+        return "WARNING"
     return "NORMAL"
 
 
 def _finalize_visual_alarm(vision_risk: str, debounced_alarm: str, alarm_reason: str) -> tuple[str, str, str]:
     if debounced_alarm == "RED":
         return "CROWD", "YELLOW", alarm_reason
-    if vision_risk in {"WARNING", "CROWD"}:
+    if vision_risk == "CROWD":
         return vision_risk, "YELLOW", "vision_risk_warning"
+    if vision_risk == "WARNING":
+        return vision_risk, "BLUE", "vision_risk_warning"
     return vision_risk, "NONE", "none"
 
 
@@ -88,6 +88,7 @@ class TrackedFrameProcessor:
         self.running = RunningDetector(config.get("running_detection"))
         self.flow_risk = FlowRiskAnalyzer(config.get("flow_risk", {}))
         self.alarms = AlarmDebouncer(config["alarm"])
+        self.evacuation_guidance = DominantFlowGuidance(config.get("evacuation_guidance"))
         self.explain_lock = ExplainTargetLock(config.get("display", {}).get("explain_lock_seconds", 1.0))
         self.publisher = publisher or ESP32Publisher(
             config.get("esp32"), legacy_dry_run=bool(config.get("esp32_dry_run", True))
@@ -175,15 +176,23 @@ class TrackedFrameProcessor:
             source_timestamp, vision_risk == "CROWD", False,
         )
         vision_risk, visual_alarm, alarm_reason = _finalize_visual_alarm(vision_risk, debounced_alarm, alarm_reason)
+        running_status = aggregate_running(running_by_id)
         status = self.build_status(self.config, trend, vision_risk, crowd_metrics, forecast)
-        status.update(exit_guidance(left_people, right_people, self.config.get("evacuation_guidance")))
+        status.update(self.evacuation_guidance.update(
+            left_people,
+            right_people,
+            motions_by_id,
+            source_timestamp,
+            running_event=bool(running_status["running_event"]),
+            vision_risk=vision_risk,
+        ))
         status.update(flow_metrics)
         status.update({
             "source_time": round(source_timestamp, 3),
             "visual_alarm": visual_alarm,
             "alarm_reason": alarm_reason,
         })
-        status.update(aggregate_running(running_by_id))
+        status.update(running_status)
         return {
             "tracks": tracks,
             "status": status,

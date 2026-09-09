@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 STARTUP_WIDTH = 1280
 STARTUP_HEIGHT = 1024
 
-STARTUP_TITLE = "慧安安全监测系统"
+STARTUP_TITLE = "慧眼疏流安全检测系统"
 STARTUP_INITIALIZING = "系统初始化中……"
 
 STARTUP_TITLE_SIZE = 68
