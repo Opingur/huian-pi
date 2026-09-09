@@ -73,3 +73,15 @@ demo_cases/*
 !demo_cases/README.md
 teacher_remote.json
 showcase_bridge.json
+# Local packaged releases and browser tooling
+release/
+.playwright-cli/
+
+# User-generated research records and presentation exports
+huian_research_records/
+慧安楼道安全监测系统_研究资料/
+火焰识别_打印演示图_5张/
+
+# Historical web snapshots kept only for local rollback
+rpi_app/web/.backup_teacher_dashboard_*/
+rpi_app/web/_backup_*/
